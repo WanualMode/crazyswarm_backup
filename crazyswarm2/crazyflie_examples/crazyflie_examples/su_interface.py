@@ -71,8 +71,6 @@ class SuInterface(Node):
             self.request_disarm()
         elif input_char == 'f':
             self.trigger_hover_calibration()
-        elif input_char == 'm':
-            self.trigger_zero_bias()
 
     def debug_callback(self, msg):
         if len(msg.data) <= BODY_TORQUE_INDEX_RANGE.stop - 1:
@@ -149,7 +147,9 @@ class SuInterface(Node):
         current_com_off_y = self.current_com_off_y
 
         measured_mass = hover_thrust / HOVER_GRAVITY
-        mass = measured_mass
+        # Hover calibration updates only the CoM offsets. Keep the mass loaded
+        # from su_params.yaml instead of replacing it with the hover estimate.
+        mass = current_mass
         # tau_input already includes the currently configured CoM compensation term.
         # In hover, the remaining body-torque mismatch corresponds to the error
         # between the current CoM estimate and the true CoM offset.
@@ -187,15 +187,15 @@ class SuInterface(Node):
         self.send_hover_calibration_trigger(calibration, log_request=True)
         self.get_logger().info(
             'HOVER CALIBRATION local result: samples=%d, thrust=%.4f N, tau_input=(%.5f, %.5f) N*m, '
-            'current mass=%.4f kg, new mass=%.4f kg, '
+            'configured mass=%.4f kg, hover-estimated mass=%.4f kg, '
             'current comOffXY=(%.5f, %.5f) m, delta comOffXY=(%.5f, %.5f) m, '
             'new comOffXY=(%.5f, %.5f) m',
             calibration['sample_count'],
             calibration['hover_thrust'],
             calibration['tau_x'],
             calibration['tau_y'],
-            current_mass,
             calibration['mass'],
+            measured_mass,
             current_com_off_x,
             current_com_off_y,
             calibration['delta_com_x'],
@@ -247,45 +247,6 @@ class SuInterface(Node):
         if self.disarm_retry_timer is not None:
             self.disarm_retry_timer.cancel()
             self.disarm_retry_timer = None
-
-    def trigger_zero_bias(self):
-        if not self.param_client.wait_for_service(timeout_sec=0.2):
-            self.get_logger().warning('crazyflie_server set_parameters service not ready')
-            return
-
-        req = SetParameters.Request()
-        req.parameters = [
-            Parameter(
-                name='cf2.params.su_wrench.zeroBias',
-                value=ParameterValue(
-                    type=ParameterType.PARAMETER_INTEGER,
-                    integer_value=1,
-                ),
-            ),
-        ]
-        future = self.param_client.call_async(req)
-        future.add_done_callback(self._zero_bias_done)
-        self.get_logger().info('ZERO BIAS command sent.')
-
-    def _zero_bias_done(self, future):
-        try:
-            response = future.result()
-        except Exception as exc:
-            self.get_logger().warning(f'ZERO BIAS request failed: {exc}')
-            return
-
-        if not response.results:
-            self.get_logger().warning('ZERO BIAS request returned no results')
-            return
-
-        result = response.results[0]
-        if result.successful:
-            self.get_logger().info('ZERO BIAS result: cf2.params.su_wrench.zeroBias=ok')
-        else:
-            reason = f' ({result.reason})' if result.reason else ''
-            self.get_logger().warning(
-                'ZERO BIAS result: cf2.params.su_wrench.zeroBias=fail' + reason
-            )
 
     def shutdown(self):
         self.cf.land(targetHeight=0.04, duration=2.5)

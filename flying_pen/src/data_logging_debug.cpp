@@ -115,7 +115,30 @@ public:
   // 88     : t2_cmd_des [m/s], gated desired tangential command in t2
   // 89..91 : tilted_wall position xyz [m], world frame
   // 92..95 : tilted_wall orientation xyzw [-], world frame
-  static constexpr int kDataLen = 96;
+  // 96     : firmware thrust effectiveness eta_hat [-]
+  // 97..99 : firmware matched force xyz [N], world frame
+  // 100..102 : firmware point-contact torque residual xyz [N*m], world frame
+  // 103..105 : firmware eta-corrected force xyz [N], world frame (legacy alias)
+  // New pipeline fields are append-only; indices 0..105 remain byte-for-byte compatible.
+  // 106..108 : rawMobF xyz [N], world frame
+  // 109..111 : rawMobT xyz [N*m], world frame
+  // 112..114 : contactF xyz [N], world frame
+  // 115      : etaHat [-]
+  enum DebugIndex : std::size_t {
+    IDX_RAW_MOB_FX = 106,
+    IDX_RAW_MOB_FY,
+    IDX_RAW_MOB_FZ,
+    IDX_RAW_MOB_TX,
+    IDX_RAW_MOB_TY,
+    IDX_RAW_MOB_TZ,
+    IDX_CONTACT_FX,
+    IDX_CONTACT_FY,
+    IDX_CONTACT_FZ,
+    IDX_ETA_HAT,
+    DEBUG_DATA_SIZE
+  };
+  static constexpr std::size_t kDataLen = DEBUG_DATA_SIZE;
+  static_assert(IDX_RAW_MOB_FX == 106, "new fields must remain append-only");
 
   DataLoggingDebugNode()
   : Node("data_logging_debug")
@@ -170,6 +193,10 @@ public:
       cf_ns_ + "/cf_su_acc_normal", 10, std::bind(&DataLoggingDebugNode::accNormalCallback, this, _1));
     sub_normal_debug_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       cf_ns_ + "/cf_su_normal_debug", 10, std::bind(&DataLoggingDebugNode::normalDebugCallback, this, _1));
+    sub_mob_raw_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
+      cf_ns_ + "/cf_mob_raw", 10, std::bind(&DataLoggingDebugNode::mobRawCallback, this, _1));
+    sub_contact_force_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
+      cf_ns_ + "/cf_contact_force", 10, std::bind(&DataLoggingDebugNode::contactForceCallback, this, _1));
     sub_normal_metrics_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       cf_ns_ + "/cf_su_normal_metrics", 10, std::bind(&DataLoggingDebugNode::normalMetricsCallback, this, _1));
     sub_stabilizer_timing_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
@@ -180,12 +207,6 @@ public:
       cf_ns_ + "/cf_imu_raw_pair", 10, std::bind(&DataLoggingDebugNode::imuRawPairCallback, this, _1));
     sub_vel_att_des_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       cf_ns_ + "/vel_att_des", 10, std::bind(&DataLoggingDebugNode::velAttDesCallback, this, _1));
-    sub_debug_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
-      cf_ns_ + "/cf_su_debug", 10, std::bind(&DataLoggingDebugNode::debugCallback, this, _1));
-    sub_mob_pure_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
-      cf_ns_ + "/cf_mob_pure", 10, std::bind(&DataLoggingDebugNode::mobPureCallback, this, _1));
-    sub_mob_res_final_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
-      cf_ns_ + "/cf_mob_res_final", 10, std::bind(&DataLoggingDebugNode::mobResFinalCallback, this, _1));
     sub_filename_tag_ = this->create_subscription<std_msgs::msg::String>(
       "/flying_pen/debug_log_filename_tag", 10,
       std::bind(&DataLoggingDebugNode::filenameTagCallback, this, _1));
@@ -246,6 +267,14 @@ public:
     out.data.push_back(t2_cmd_des_);
     push3(out, wall_xyz_);
     push4(out, wall_quat_xyzw_);
+    out.data.push_back(thrust_eff_eta_hat_);
+    push3(out, thrust_eff_match_force_);
+    push3(out, thrust_eff_residual_);
+    push3(out, thrust_eff_corrected_force_);
+    push3(out, raw_mob_force_);
+    push3(out, raw_mob_torque_);
+    push3(out, contact_force_);
+    out.data.push_back(eta_hat_);
 
     if (out.data.size() != static_cast<size_t>(kDataLen)) {
       out.data.resize(kDataLen, qnan_debug());
@@ -324,7 +353,14 @@ private:
       << "loopDtUs,loopDtUsMax,"
       << "alphaFrame,t1CmdDes,t2CmdDes,"
       << "wall_x,wall_y,wall_z,"
-      << "wall_qx,wall_qy,wall_qz,wall_qw\n";
+      << "wall_qx,wall_qy,wall_qz,wall_qw,"
+      << "thrustEffEtaHat,"
+      << "thrustEffMatchFx,thrustEffMatchFy,thrustEffMatchFz,"
+      << "thrustEffEpsTx,thrustEffEpsTy,thrustEffEpsTz,"
+      << "thrustEffCorrFx,thrustEffCorrFy,thrustEffCorrFz,"
+      << "rawMobFx,rawMobFy,rawMobFz,"
+      << "rawMobTx,rawMobTy,rawMobTz,"
+      << "contactFx,contactFy,contactFz,etaHat\n";
     csv_.flush();
   }
 
@@ -432,6 +468,30 @@ private:
       normal_postproj_[2] = msg->values[5];
     }
   }
+  void mobRawCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
+  {
+    if (msg->values.size() >= 6) {
+      for (std::size_t i = 0; i < 3; ++i) {
+        raw_mob_force_[i] = msg->values[i];
+        raw_mob_torque_[i] = msg->values[i + 3];
+      }
+      // Preserve useful legacy aliases without changing their indices.
+      mob_force_final_ = raw_mob_force_;
+      mob_torque_ = raw_mob_torque_;
+    }
+  }
+  void contactForceCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
+  {
+    if (msg->values.size() >= 4) {
+      for (std::size_t i = 0; i < 3; ++i) {
+        contact_force_[i] = msg->values[i];
+      }
+      eta_hat_ = msg->values[3];
+      // Preserve the pre-existing eta/corrected-force columns as aliases.
+      thrust_eff_corrected_force_ = contact_force_;
+      thrust_eff_eta_hat_ = eta_hat_;
+    }
+  }
   void normalMetricsCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
   {
     if (msg->values.size() >= 5) {
@@ -501,37 +561,6 @@ private:
       fw_cmd_xyz_[0] = msg->values[1];
       fw_cmd_xyz_[1] = msg->values[2];
       fw_cmd_xyz_[2] = msg->values[3];
-    }
-  }
-
-  void debugCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
-  {
-    if (!msg->values.empty()) {
-      zero_bias_count_ = msg->values[0];
-    }
-  }
-
-  void mobPureCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
-  {
-    if (msg->values.size() >= 6) {
-      mob_force_none_[0] = msg->values[0];
-      mob_force_none_[1] = msg->values[1];
-      mob_force_none_[2] = msg->values[2];
-      mob_torque_[0] = msg->values[3];
-      mob_torque_[1] = msg->values[4];
-      mob_torque_[2] = msg->values[5];
-    }
-  }
-
-  void mobResFinalCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
-  {
-    if (msg->values.size() >= 6) {
-      mob_force_residual_[0] = msg->values[0];
-      mob_force_residual_[1] = msg->values[1];
-      mob_force_residual_[2] = msg->values[2];
-      mob_force_final_[0] = msg->values[3];
-      mob_force_final_[1] = msg->values[4];
-      mob_force_final_[2] = msg->values[5];
     }
   }
 
@@ -605,14 +634,13 @@ private:
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_vel_pair_;
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_acc_normal_;
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_normal_debug_;
+  rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_mob_raw_;
+  rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_contact_force_;
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_normal_metrics_;
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_stabilizer_timing_;
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_alpha_frame_;
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_imu_raw_pair_;
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_vel_att_des_;
-  rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_debug_;
-  rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_mob_pure_;
-  rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_mob_res_final_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_filename_tag_;
 
   std::string csv_dir_;
@@ -651,6 +679,14 @@ private:
   std::array<double, 3> normal_preproj_ = {qnan_debug(), qnan_debug(), qnan_debug()};
   std::array<double, 3> normal_postproj_ = {qnan_debug(), qnan_debug(), qnan_debug()};
   std::array<double, 3> normal_est_ = {qnan_debug(), qnan_debug(), qnan_debug()};
+  double thrust_eff_eta_hat_ = qnan_debug();
+  std::array<double, 3> thrust_eff_match_force_ = {qnan_debug(), qnan_debug(), qnan_debug()};
+  std::array<double, 3> thrust_eff_residual_ = {qnan_debug(), qnan_debug(), qnan_debug()};
+  std::array<double, 3> thrust_eff_corrected_force_ = {qnan_debug(), qnan_debug(), qnan_debug()};
+  std::array<double, 3> raw_mob_force_ = {qnan_debug(), qnan_debug(), qnan_debug()};
+  std::array<double, 3> raw_mob_torque_ = {qnan_debug(), qnan_debug(), qnan_debug()};
+  std::array<double, 3> contact_force_ = {qnan_debug(), qnan_debug(), qnan_debug()};
+  double eta_hat_ = qnan_debug();
   std::array<double, 3> ee_vel_used_ = {qnan_debug(), qnan_debug(), qnan_debug()};
   double omega_n_ = qnan_debug();
   double normal_velocity_leakage_ = qnan_debug();

@@ -387,6 +387,17 @@ public:
       // check robots/<robot_name>/firmware_params
       update_map(set_param_map, "robots." + name_ + ".firmware_params");
 
+      const auto configured_mass = set_param_map.find("su_wrench.mass");
+      if (configured_mass != set_param_map.end()) {
+        if (configured_mass->second.get_type() == rclcpp::PARAMETER_DOUBLE) {
+          hover_calibration_mass_ = configured_mass->second.get<double>();
+          has_hover_calibration_mass_ = true;
+        } else if (configured_mass->second.get_type() == rclcpp::PARAMETER_INTEGER) {
+          hover_calibration_mass_ = static_cast<double>(configured_mass->second.get<int64_t>());
+          has_hover_calibration_mass_ = true;
+        }
+      }
+
       // Update parameters
       for (const auto&i : set_param_map) {
         std::string paramName = name + ".params." + std::regex_replace(i.first, std::regex("\\."), ".");
@@ -707,6 +718,17 @@ private:
       RCLCPP_WARN(logger_, "[%s] hover_calibration ignored: expected [mass, comOffX, comOffY]", name_.c_str());
       return;
     }
+    if (!has_hover_calibration_mass_ || hover_calibration_mass_ <= 0.0) {
+      RCLCPP_ERROR(
+        logger_,
+        "[%s] hover_calibration ignored: no valid su_wrench.mass was loaded from configuration",
+        name_.c_str());
+      return;
+    }
+
+    const double mass = hover_calibration_mass_;
+    const double com_off_x = msg->data[1];
+    const double com_off_y = msg->data[2];
 
     const struct __attribute__((packed)) {
       uint8_t magic;
@@ -717,21 +739,18 @@ private:
     } payload = {
       kHoverCalibrationTriggerMagic,
       kHoverCalibrationTriggerVersion,
-      static_cast<float>(msg->data[0]),
-      static_cast<float>(msg->data[1]),
-      static_cast<float>(msg->data[2]),
+      static_cast<float>(mass),
+      static_cast<float>(com_off_x),
+      static_cast<float>(com_off_y),
     };
 
     cf_.sendAppChannelPacket(reinterpret_cast<const uint8_t*>(&payload), sizeof(payload));
 
-    const double mass = msg->data[0];
-    const double com_off_x = msg->data[1];
-    const double com_off_y = msg->data[2];
     publish_debug_log_filename_tag(mass, com_off_x, com_off_y);
-    persist_hover_calibration_to_yaml(mass, com_off_x, com_off_y);
+    persist_hover_calibration_to_yaml(com_off_x, com_off_y);
     RCLCPP_INFO(
       logger_,
-      "[%s] hover_calibration forwarded to firmware: mass=%.4f kg, comOffXY=(%.5f, %.5f) m",
+      "[%s] hover_calibration forwarded to firmware: configured mass=%.4f kg, comOffXY=(%.5f, %.5f) m",
       name_.c_str(),
       mass,
       com_off_x,
@@ -790,7 +809,6 @@ private:
 
   bool update_su_params_file(
     const std::filesystem::path& path,
-    double mass,
     double com_off_x,
     double com_off_y) const
   {
@@ -813,7 +831,6 @@ private:
     bool in_cf21 = false;
     bool in_firmware_params = false;
     bool in_su_wrench = false;
-    bool found_mass = false;
     bool found_com_x = false;
     bool found_com_y = false;
 
@@ -859,10 +876,7 @@ private:
         continue;
       }
 
-      if (indent == 8 && stripped.rfind("mass:", 0) == 0) {
-        current_line = replace_yaml_scalar_line(current_line, mass);
-        found_mass = true;
-      } else if (indent == 8 && stripped.rfind("comOffX:", 0) == 0) {
+      if (indent == 8 && stripped.rfind("comOffX:", 0) == 0) {
         current_line = replace_yaml_scalar_line(current_line, com_off_x);
         found_com_x = true;
       } else if (indent == 8 && stripped.rfind("comOffY:", 0) == 0) {
@@ -871,7 +885,7 @@ private:
       }
     }
 
-    if (!(found_mass && found_com_x && found_com_y)) {
+    if (!(found_com_x && found_com_y)) {
       return false;
     }
 
@@ -886,14 +900,14 @@ private:
     return true;
   }
 
-  void persist_hover_calibration_to_yaml(double mass, double com_off_x, double com_off_y)
+  void persist_hover_calibration_to_yaml(double com_off_x, double com_off_y)
   {
     std::vector<std::string> updated_paths;
     std::vector<std::string> failed_paths;
 
     for (const auto& path : resolve_su_params_paths()) {
       try {
-        if (update_su_params_file(path, mass, com_off_x, com_off_y)) {
+        if (update_su_params_file(path, com_off_x, com_off_y)) {
           updated_paths.push_back(path.string());
         } else {
           failed_paths.push_back(path.string() + " (keys not found)");
@@ -913,7 +927,7 @@ private:
       }
       RCLCPP_INFO(
         logger_,
-        "[%s] persisted hover calibration to su_params.yaml: %s",
+        "[%s] persisted hover com offsets to su_params.yaml: %s",
         name_.c_str(),
         oss.str().c_str());
     }
@@ -928,7 +942,7 @@ private:
       }
       RCLCPP_WARN(
         logger_,
-        "[%s] failed to persist some su_params.yaml updates: %s",
+        "[%s] failed to persist some hover com offset updates: %s",
         name_.c_str(),
         oss.str().c_str());
     }
@@ -1283,6 +1297,8 @@ private:
   Crazyflie cf_;
   std::string message_buffer_;
   std::string name_;
+  double hover_calibration_mass_{0.0};
+  bool has_hover_calibration_mass_{false};
 
   rclcpp::Node* node_;
   tf2_ros::TransformBroadcaster tf_broadcaster_;

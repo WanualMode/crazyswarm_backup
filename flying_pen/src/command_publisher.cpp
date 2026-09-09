@@ -1,5 +1,4 @@
 #include <rclcpp/rclcpp.hpp>
-#include <rclcpp/parameter_client.hpp>
 #include <ament_index_cpp/get_package_share_directory.hpp>
 
 #include <crazyflie_interfaces/msg/log_data_generic.hpp>
@@ -55,12 +54,6 @@ public:
     mob_force_sub_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       "cf2/cf_Fext_MOB", 10,
       std::bind(&CommandPublisher::mobForceCallback, this, std::placeholders::_1));
-    zero_bias_dbg_sub_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
-      "cf2/cf_zero_bias_dbg", 10,
-      std::bind(&CommandPublisher::zeroBiasDebugCallback, this, std::placeholders::_1));
-
-    param_client_ = std::make_shared<rclcpp::AsyncParametersClient>(
-      this, "/crazyflie_server");
 
     position_tick_ = declareVector3Parameter("position_tick", {0.1, 0.1, 0.2});
     velocity_tick_ = declareVector3Parameter("velocity_tick", {0.1, 0.1, 0.1});
@@ -80,8 +73,6 @@ public:
     mob_force_.fill(std::numeric_limits<double>::quiet_NaN());
     latest_battery_voltage_ = std::numeric_limits<double>::quiet_NaN();
     displayed_battery_voltage_ = std::numeric_limits<double>::quiet_NaN();
-    zero_bias_count_ = -1.0;
-    zero_bias_last_result_ = "not requested yet";
     status_msg_ = "ready";
     last_battery_display_update_ = std::chrono::steady_clock::now();
     has_latest_pose_ = false;
@@ -129,7 +120,6 @@ private:
   static constexpr int ROW_STATUS_FORCE = 10;
   static constexpr int ROW_STATUS_MOB = 11;
   static constexpr int ROW_STATUS_BATTERY = 12;
-  static constexpr int ROW_STATUS_ZERO = 13;
   static constexpr int ROW_STATUS_MSG = 14;
 
   static constexpr int ROW_CMD_HEADER = 16;
@@ -280,7 +270,6 @@ private:
     else if (c == 'j')  { force_des_ += force_delta_; publishPositionControl(); updateForceStatus(); pushInputHistory("j : force += tick"); }
     else if (c == 'k')  { force_des_ -= force_delta_; publishPositionControl(); updateForceStatus(); pushInputHistory("k : force -= tick"); }
     else if (c == 'l')  { force_des_ = 0.0; publishPositionControl(); updateForceStatus(); pushInputHistory("l : force reset"); }
-    else if (c == 'r')  { triggerMobBiasZero(); pushInputHistory("r : zero MOB bias"); }
     else if (c == 'o' || c == 'p') {
       publishKeyboardTrigger(c);
     } else if (c == 't') {
@@ -591,74 +580,11 @@ private:
       status_msg_ = "published 'p' to keyboard_input (DISARM)";
       pushInputHistory("p : DISARM (keyboard_input)");
     } else if (key == 'f') {
-      status_msg_ = "published 'f' to keyboard_input (hover mass/com calibration)";
-      pushInputHistory("f : hover mass/com calibration");
+      status_msg_ = "published 'f' to keyboard_input (hover CoM calibration, configured mass retained)";
+      pushInputHistory("f : hover CoM calibration (configured mass retained)");
     } else {
       status_msg_ = "published keyboard trigger";
       pushInputHistory("keyboard trigger published");
-    }
-  }
-
-  void triggerMobBiasZero()
-  {
-    if (!param_client_) {
-      status_msg_ = "param_client not ready";
-      RCLCPP_WARN(this->get_logger(), "%s", status_msg_.c_str());
-      return;
-    }
-
-    if (!param_client_->wait_for_service(100ms)) {
-      status_msg_ = "crazyflie_server param service not ready";
-      RCLCPP_WARN(this->get_logger(), "%s", status_msg_.c_str());
-      return;
-    }
-
-    const std::string param_name_primary = "cf2.params.su_wrench.zeroBias";
-    const std::string param_name_legacy = "cf2.params.suWrenchObs.zeroBias";
-    auto future = param_client_->set_parameters(
-      {
-        rclcpp::Parameter(param_name_primary, 1),
-        rclcpp::Parameter(param_name_legacy, 1)
-      });
-
-    status_msg_ = "requested MOB bias zeroing";
-    RCLCPP_INFO(this->get_logger(), "%s", status_msg_.c_str());
-
-    future.wait_for(200ms);
-    if (future.wait_for(0ms) != std::future_status::ready) {
-      status_msg_ = "MOB bias zero request sent (waiting on server)";
-      RCLCPP_WARN(this->get_logger(), "%s", status_msg_.c_str());
-      return;
-    }
-
-    bool any_success = false;
-    std::string detail;
-    const auto results = future.get();
-    for (size_t i = 0; i < results.size(); ++i) {
-      const auto & result = results[i];
-      if (result.successful) {
-        any_success = true;
-      }
-
-      const std::string & name = (i == 0) ? param_name_primary : param_name_legacy;
-      if (!detail.empty()) {
-        detail += " | ";
-      }
-      detail += name + "=" + (result.successful ? "ok" : "fail");
-      if (!result.successful && !result.reason.empty()) {
-        detail += "(" + result.reason + ")";
-      }
-    }
-
-    if (any_success) {
-      status_msg_ = "MOB bias zero trigger sent";
-      zero_bias_last_result_ = detail;
-    } else if (!detail.empty()) {
-      status_msg_ = "MOB bias zero failed";
-      zero_bias_last_result_ = detail;
-    } else {
-      status_msg_ = "MOB bias zero failed";
-      zero_bias_last_result_ = "set_parameters returned no details";
     }
   }
 
@@ -711,13 +637,6 @@ private:
     mob_force_[2] = msg->values[2];
   }
 
-  void zeroBiasDebugCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
-  {
-    if (msg && !msg->values.empty()) {
-      zero_bias_count_ = msg->values[0];
-    }
-  }
-
   void updateDisplayedBatteryVoltage()
   {
     const auto now = std::chrono::steady_clock::now();
@@ -762,7 +681,7 @@ private:
     drawSepLine(ROW_USAGE_HEADER, "usage");
     mvprintw(ROW_USAGE_1, 0, "velocity: w/s(x), a/d(y), e/q(z), z/c(yaw), x(zero vel), i(contact on)");
     mvprintw(ROW_USAGE_2, 0, "velocity: w/s/a/d/e/q(v), u(contact off), n(stop), m(run)");
-    mvprintw(ROW_USAGE_3, 0, "force/bias: j/k/l (cmd_fx), r(zero bias), f(hover mass/com), o/p arm/disarm, t quit");
+    mvprintw(ROW_USAGE_3, 0, "force/cal: j/k/l (cmd_fx), f(hover CoM, keep mass), o/p arm/disarm, t quit");
 
     drawSepLine(ROW_STATUS_HEADER, "status");
     mvprintw(ROW_STATUS_MODE, 0, "mode: ");
@@ -770,7 +689,6 @@ private:
     mvprintw(ROW_STATUS_FORCE, 0, "force command: ");
     mvprintw(ROW_STATUS_MOB, 0, "MOB force: ");
     mvprintw(ROW_STATUS_BATTERY, 0, "battery voltage: ");
-    mvprintw(ROW_STATUS_ZERO, 0, "zero bias dbg: ");
     mvprintw(ROW_STATUS_MSG, 0, "status: ");
 
     drawSepLine(ROW_CMD_HEADER, "Position Command, Now");
@@ -829,14 +747,6 @@ private:
       printw("battery voltage: waiting for cf2/status");
     }
 
-    move(ROW_STATUS_ZERO, 0);
-    clrtoeol();
-    if (std::isfinite(zero_bias_count_)) {
-      printw("zero bias dbg: count=%.0f, last=%s", zero_bias_count_, zero_bias_last_result_.c_str());
-    } else {
-      printw("zero bias dbg: waiting for cf2/cf_zero_bias_dbg, last=%s", zero_bias_last_result_.c_str());
-    }
-
     move(ROW_STATUS_MSG, 0);
     clrtoeol();
     printw("status: %s", status_msg_.c_str());
@@ -880,8 +790,6 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr fw_cmd_sub_;
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr mob_force_sub_;
-  rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr zero_bias_dbg_sub_;
-  std::shared_ptr<rclcpp::AsyncParametersClient> param_client_;
   rclcpp::TimerBase::SharedPtr timer_;
 
   std::array<double, 4> cmd_xyz_yaw_;
@@ -896,7 +804,6 @@ private:
   double force_delta_;
   double latest_battery_voltage_;
   double displayed_battery_voltage_;
-  double zero_bias_count_;
   uint8_t current_mode_;
   uint8_t current_command_reference_;
   uint8_t current_trajectory_mode_;
@@ -907,7 +814,6 @@ private:
   std::string trajectory_label_none_;
   std::string trajectory_label_1_;
   std::string status_msg_;
-  std::string zero_bias_last_result_;
   std::chrono::steady_clock::time_point last_battery_display_update_;
   std::chrono::steady_clock::time_point velocity_mode_command_ready_time_{};
   std::deque<std::string> last_inputs_;

@@ -143,8 +143,6 @@ public:
       cf_ns_ + "/cf_world_force", 10, std::bind(&DataLoggingNode::cfWorldForceCallback, this, _1));
     sub_cf_F_input_scaled_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       cf_ns_ + "/cf_F_input_scaled", 10, std::bind(&DataLoggingNode::cfFInputScaledCallback, this, _1));
-    sub_cf_zero_bias_dbg_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
-      cf_ns_ + "/cf_zero_bias_dbg", 10, std::bind(&DataLoggingNode::cfZeroBiasDbgCallback, this, _1));
   }
 
   ~DataLoggingNode() override
@@ -383,7 +381,7 @@ private:
     if (age_sec(t, t_last_cf_body_input_force_) < stale_fail_sec_) mask |= (1ull << 15);
     if (age_sec(t, t_last_cf_world_force_) < stale_fail_sec_) mask |= (1ull << 16);
     if (age_sec(t, t_last_cf_F_input_scaled_) < stale_fail_sec_) mask |= (1ull << 17);
-    if (age_sec(t, t_last_cf_zero_bias_dbg_) < stale_fail_sec_) mask |= (1ull << 18);
+    // Bit 18 is intentionally left clear: the retired zero-bias topic is no longer subscribed.
     return mask;
   }
 
@@ -414,7 +412,6 @@ private:
     warn_topic("cf_body_input_force", age_sec(t, t_last_cf_body_input_force_));
     warn_topic("cf_world_force", age_sec(t, t_last_cf_world_force_));
     warn_topic("cf_F_input_scaled", age_sec(t, t_last_cf_F_input_scaled_));
-    warn_topic("cf_zero_bias_dbg", age_sec(t, t_last_cf_zero_bias_dbg_));
   }
 
   void poseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
@@ -596,14 +593,6 @@ private:
     }
   }
 
-  void cfZeroBiasDbgCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
-  {
-    if (!msg->values.empty()) {
-      zero_bias_count_ = msg->values[0];
-      t_last_cf_zero_bias_dbg_ = now_sec();
-    }
-  }
-
   double now_sec() { return get_clock()->now().seconds(); }
 
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr data_pub_;
@@ -624,7 +613,6 @@ private:
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_cf_body_input_force_;
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_cf_world_force_;
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_cf_F_input_scaled_;
-  rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_cf_zero_bias_dbg_;
 
   std::string csv_dir_;
   std::string csv_path_;

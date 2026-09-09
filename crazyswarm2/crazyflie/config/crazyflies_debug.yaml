@@ -47,6 +47,13 @@ robot_types:
         cf_su_normal_debug:
           frequency: 20
           vars: [suPosRef.nPreX, suPosRef.nPreY, suPosRef.nPreZ, suPosRef.nPostX, suPosRef.nPostY, suPosRef.nPostZ]
+        # Flying Pen force pipeline. Keep each block within the Crazyflie log packet limit.
+        cf_mob_raw:
+          frequency: 20
+          vars: [suWrenchObs.fHatWx, suWrenchObs.fHatWy, suWrenchObs.fHatWz, suWrenchObs.tauLWx, suWrenchObs.tauLWy, suWrenchObs.tauLWz]
+        cf_contact_force:
+          frequency: 20
+          vars: [suThrustEff.corrFx, suThrustEff.corrFy, suThrustEff.corrFz, suThrustEff.etaHat]
         # cf_su_normal_metrics:
         #   frequency: 20
         #   vars: [suPosRef.vEeX, suPosRef.vEeY, suPosRef.vEeZ, suPosRef.omgN, suPosRef.nVelLeak]
@@ -62,12 +69,6 @@ robot_types:
         cf_stabilizer_timing:
           frequency: 20
           vars: [stabilizer.loopDtUs, stabilizer.loopDtUsMax]
-        cf_mob_pure:
-          frequency: 20
-          vars: [suWrenchObs.fHatNWx, suWrenchObs.fHatNWy, suWrenchObs.fHatNWz, suWrenchObs.tauLWx, suWrenchObs.tauLWy, suWrenchObs.tauLWz]
-        cf_mob_res_final:
-          frequency: 20
-          vars: [suWrenchObs.fHatRWx, suWrenchObs.fHatRWy, suWrenchObs.fHatRWz, suWrenchObs.fHatWx, suWrenchObs.fHatWy, suWrenchObs.fHatWz]
 #         # Desired translational velocity from the position controller.
 
 

@@ -23,6 +23,12 @@ using namespace std::chrono_literals;
 
 namespace {
 constexpr double kDegToRad = M_PI / 180.0;
+constexpr std::size_t kLegacyRawMobForceIndex = 54;
+constexpr std::size_t kLegacyContactForceIndex = 103;
+constexpr std::size_t kRawMobForceIndex = 106;
+constexpr std::size_t kContactForceIndex = 112;
+constexpr std::size_t kPipelineDataSize = 116;
+constexpr double kForceArrowScale = 10.0;
 
 bool isFiniteVector(const Eigen::Vector3d & v)
 {
@@ -79,8 +85,8 @@ public:
 
     raw_cmd_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("/cmd_position_marker", 10);
     fw_cmd_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("/fw_cmd_position_marker", 10);
-    raw_force_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("/mob_force_pure_marker", 10);
-    scaled_force_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("/mob_force_residual_marker", 10);
+    raw_force_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("/raw_mob_force_marker", 10);
+    corrected_force_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("/corrected_contact_force_marker", 10);
     normal_est_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("/normal_est_marker", 10);
     acc_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("/acc_marker", 10);
     vel_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("/vel_marker", 10);
@@ -94,8 +100,8 @@ public:
     rpy_meas_.setZero();
     cmd_pos_.setZero();
     fw_cmd_pos_.setZero();
-    mob_force_pure_.setZero();
-    mob_force_residual_.setZero();
+    raw_mob_force_.setZero();
+    corrected_contact_force_.setZero();
     normal_est_.setZero();
     world_vel_.setZero();
     world_acc_.setZero();
@@ -162,13 +168,19 @@ private:
     world_acc_[1] = msg->data[37];
     world_acc_[2] = msg->data[38];
 
-    mob_force_pure_[0] = msg->data[48];
-    mob_force_pure_[1] = msg->data[49];
-    mob_force_pure_[2] = msg->data[50];
+    const std::size_t raw_force_index =
+      msg->data.size() >= kPipelineDataSize ? kRawMobForceIndex : kLegacyRawMobForceIndex;
+    raw_mob_force_[0] = msg->data[raw_force_index];
+    raw_mob_force_[1] = msg->data[raw_force_index + 1];
+    raw_mob_force_[2] = msg->data[raw_force_index + 2];
 
-    mob_force_residual_[0] = msg->data[51];
-    mob_force_residual_[1] = msg->data[52];
-    mob_force_residual_[2] = msg->data[53];
+    if (msg->data.size() >= kLegacyContactForceIndex + 3) {
+      const std::size_t contact_force_index =
+        msg->data.size() >= kPipelineDataSize ? kContactForceIndex : kLegacyContactForceIndex;
+      corrected_contact_force_[0] = msg->data[contact_force_index];
+      corrected_contact_force_[1] = msg->data[contact_force_index + 1];
+      corrected_contact_force_[2] = msg->data[contact_force_index + 2];
+    }
 
     normal_est_[0] = msg->data[76];
     normal_est_[1] = msg->data[77];
@@ -293,12 +305,9 @@ private:
     publishSphere(raw_cmd_pub_, stamp, "world", "cmd_position", 0, p_cmd, 0.05, 0.0f, 0.45f, 0.90f, 0.85f);
     publishSphere(fw_cmd_pub_, stamp, "world", "fw_cmd_position", 0, p_fw_cmd, 0.06, 0.90f, 0.35f, 0.10f, 0.90f);
 
-    Eigen::Vector3d normal_est_display = normal_est_;
-    normal_est_display.z() *= 1.3;
-
-    publishArrow(raw_force_pub_, stamp, "world", "mob_force_pure", 0, p0, mob_force_pure_, 10.0, 0.02, 0.04, 0.06, 1.0f, 0.2f, 0.2f);
-    publishArrow(scaled_force_pub_, stamp, "world", "mob_force_residual", 0, p_ee, -mob_force_residual_, 10.0, 0.02, 0.04, 0.06, 0.7f, 0.0f, 0.8f);
-    publishArrow(normal_est_pub_, stamp, "world", "normal_estimation", 0, p0, normal_est_display, 0.35, 0.02, 0.04, 0.06, 0.1f, 0.8f, 0.2f);
+    publishArrow(raw_force_pub_, stamp, "world", "raw_mob_force", 0, p_ee, raw_mob_force_, kForceArrowScale, 0.02, 0.04, 0.06, 1.0f, 0.2f, 0.2f);
+    publishArrow(corrected_force_pub_, stamp, "world", "corrected_contact_force", 0, p_ee, corrected_contact_force_, kForceArrowScale, 0.02, 0.04, 0.06, 0.7f, 0.0f, 0.8f);
+    publishArrow(normal_est_pub_, stamp, "world", "normal_estimation", 0, p_ee, normal_est_, 0.35, 0.02, 0.04, 0.06, 0.1f, 0.8f, 0.2f);
     publishArrow(acc_pub_, stamp, "world", "acceleration", 0, p0, world_acc_, 0.5, 0.015, 0.03, 0.05, 0.0f, 0.0f, 1.0f);
     publishArrow(vel_pub_, stamp, "world", "velocity", 0, p0, world_vel_, 1.0, 0.015, 0.03, 0.05, 1.0f, 0.8f, 0.0f);
     publishArrow(ee_vel_pub_, stamp, "world", "ee_velocity", 0, p_ee, ee_vel_used_, 2.0, 0.015, 0.03, 0.05, 0.0f, 0.9f, 0.9f);
@@ -951,7 +960,7 @@ private:
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr raw_cmd_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr fw_cmd_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr raw_force_pub_;
-  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr scaled_force_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr corrected_force_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr normal_est_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr acc_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr vel_pub_;
@@ -965,8 +974,8 @@ private:
   Eigen::Vector3d cmd_pos_;
   Eigen::Vector3d fw_cmd_pos_;
   double cmd_yaw_deg_{0.0};
-  Eigen::Vector3d mob_force_pure_;
-  Eigen::Vector3d mob_force_residual_;
+  Eigen::Vector3d raw_mob_force_;
+  Eigen::Vector3d corrected_contact_force_;
   Eigen::Vector3d normal_est_;
   Eigen::Vector3d world_vel_;
   Eigen::Vector3d world_acc_;

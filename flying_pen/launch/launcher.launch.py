@@ -21,7 +21,6 @@ def launch_setup(context, *args, **kwargs):
     log_player_share = get_package_share_directory("log_player")
 
     runtime_params = os.path.join(fp_share, "config", "parameters.yaml")
-    rviz_config = os.path.join(fp_share, "config", "config.rviz")
     rviz_visual_params = os.path.join(fp_share, "config", "rviz_visual.yaml")
     urdf_default_path = os.path.join(fp_share, "models", "model.urdf")
     urdf_debug_path = os.path.join(log_player_share, "models", "cf_BLDC.urdf")
@@ -40,6 +39,11 @@ def launch_setup(context, *args, **kwargs):
         su_wrench_cfg.get("rOffZ", 0.04),
     ]
     runtime_mode = runtime_cfg.get("runtime", {}).get("ros__parameters", {}).get("mode", "default")
+    rviz_config = os.path.join(
+        log_player_share,
+        "config",
+        "log_player_debug.rviz" if runtime_mode == "debug" else "log_player.rviz",
+    )
     urdf_path = urdf_debug_path if runtime_mode == "debug" else urdf_default_path
 
     with open(urdf_path, "r", encoding="utf-8") as f:

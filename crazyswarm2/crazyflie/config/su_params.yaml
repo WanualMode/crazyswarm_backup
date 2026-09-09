@@ -2,15 +2,13 @@ robot_types:
   cf21:
     firmware_params:
       su_wrench:
-        mass: 0.047311  # observer mass model [kg]
-        Keps: 0.0  # consistency residual correction gain
-        comOffX: -0.000486  # body-frame CoM offset x [m]
-        comOffY: 0.000093  # body-frame CoM offset y [m]
+        mass: 0.047000  # observer mass model [kg]
+        comOffX: 0.000097  # body-frame CoM offset x [m]
+        comOffY: 0.000548  # body-frame CoM offset y [m]
         comOffZ: 0.0  # body-frame CoM offset z [m]
-        rOffX: 0.08
+        rOffX: 0.09
         rOffY: 0.0
-        rOffZ: 0.04
-        consistencyMode: 2  # 0=None, 1=Residual, 2=Both
+        rOffZ: 0.035
 
       su_position:
         traj1Shape: 1  # 0=None, 1=Circle, 2=Square
@@ -27,7 +25,7 @@ robot_types:
         alphaBar: -0.007  # [+] omega_n bar, [-] normal_velocity_leakage bar, 0 disables alpha_frame gating
 
         normBeta: 1.5  # [1/s] beta ≈ 2*pi*f_c, decay rate of the normal-axis memory matrix
-        normEpsG: 0.0004  # [m^2/s^2], velocity-projection regularization epsilon_g
+        normEpsG: 100.0004  # [m^2/s^2], velocity-projection regularization epsilon_g
         normEpsF: 100.015  # [N], minimum force evidence norm epsilon_f
 
         epsilonFMin: 1.01  # [N], yaw-alignment smoothing starts when |F_xy| exceeds this
