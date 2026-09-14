@@ -2,9 +2,9 @@ robot_types:
   cf21:
     firmware_params:
       su_wrench:
-        mass: 0.047000  # observer mass model [kg]
-        comOffX: 0.000097  # body-frame CoM offset x [m]
-        comOffY: 0.000548  # body-frame CoM offset y [m]
+        mass: 0.045000  # observer mass model [kg]
+        comOffX: -0.000737  # body-frame CoM offset x [m]
+        comOffY: -0.000230  # body-frame CoM offset y [m]
         comOffZ: 0.0  # body-frame CoM offset z [m]
         rOffX: 0.09
         rOffY: 0.0

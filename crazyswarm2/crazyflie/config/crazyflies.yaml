@@ -2,7 +2,7 @@
 robots:
   cf2:
     enabled: true
-    uri: radio://0/100/1M/E7E7E7E7B6 # first
+    uri: radio://0/100/1M/E7E7E7E7B7 # first
 #    uri: radio://0/80/2M/E7E7E7E7B5 # second
 #    uri: udp://0.0.0.0:19850 # simul
     initial_position: [0.0, 0.0, 0.0]

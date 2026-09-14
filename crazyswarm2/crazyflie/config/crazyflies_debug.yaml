@@ -2,7 +2,7 @@
 robots:
   cf2:
     enabled: true
-    uri: radio://0/100/1M/E7E7E7E7B6 # first
+    uri: radio://0/100/1M/E7E7E7E7B7 # first
     # uri: radio://0/80/2M/E7E7E7E7B5 # second
 #    uri: udp://0.0.0.0:19850 # simul
     initial_position: [0.0, 0.0, 0.0]
@@ -37,10 +37,10 @@ robot_types:
         cf_su_vel_pair:
           frequency: 20
           vars: [suWrenchObs.stateVx, suWrenchObs.stateVy, suWrenchObs.stateVz, suWrenchObs.posVx, suWrenchObs.posVy, suWrenchObs.posVz]
-        # Raw body-frame acceleration + raw gyro input.
+        # Raw and processed body-frame acceleration, paired axis-by-axis.
         cf_imu_raw_pair:
           frequency: 20
-          vars: [acc.x, acc.y, acc.z, gyro.x, gyro.y, gyro.z]
+          vars: [accRaw.x, accRaw.y, accRaw.z, acc.x, acc.y, acc.z]
         cf_su_acc_normal:
           frequency: 20
           vars: [suWrenchObs.accWx, suWrenchObs.accWy, suWrenchObs.accWz, suPosRef.nEstX, suPosRef.nEstY, suPosRef.nEstZ]
@@ -82,8 +82,8 @@ robot_types:
         extPosStdDev: 1e-3
         extQuatStdDev: 0.5e-1
       imu_sensors:
-        accTrimRoll: -0.32
-        accTrimPitch: -0.05
+        accTrimRoll: -0.72
+        accTrimPitch: 0.34
 
 
       kalman:

@@ -99,8 +99,8 @@ public:
   // 54..56 : mob_force_final xyz [N]
   // 57..59 : mob_torque xyz [N*m]
   // 60..62 : mob_residual xyz [N*m]
-  // 63..65 : body-frame accel xyz [G], after manual bias correction and before gravity-trim/LPF
-  // 66..68 : body-frame gyro xyz [deg/s], Mahony/complementary gyro input
+  // 63..65 : accRaw xyz [G], body frame
+  // 66..68 : acc xyz [G], body frame
   // 69     : force_desired [N], scalar preload force command from PositionControl
   // 70..72 : normal_preproj xyz [-], normalized force-direction evidence
   // 73..75 : normal_postproj xyz [-], velocity-projected normal candidate
@@ -119,7 +119,7 @@ public:
   // 97..99 : firmware matched force xyz [N], world frame
   // 100..102 : firmware point-contact torque residual xyz [N*m], world frame
   // 103..105 : firmware eta-corrected force xyz [N], world frame (legacy alias)
-  // New pipeline fields are append-only; indices 0..105 remain byte-for-byte compatible.
+  // New pipeline fields are append-only; the numeric layout through index 105 is unchanged.
   // 106..108 : rawMobF xyz [N], world frame
   // 109..111 : rawMobT xyz [N*m], world frame
   // 112..114 : contactF xyz [N], world frame
@@ -252,7 +252,7 @@ public:
     push3(out, mob_torque_);
     push3(out, mob_residual_);
     push3(out, acc_raw_body_);
-    push3(out, gyro_raw_body_);
+    push3(out, acc_body_);
     out.data.push_back(force_desired_);
     push3(out, normal_preproj_);
     push3(out, normal_postproj_);
@@ -343,7 +343,7 @@ private:
       << "mobTorque_x,mobTorque_y,mobTorque_z,"
       << "mobResidual_x,mobResidual_y,mobResidual_z,"
       << "accRawBody_x,accRawBody_y,accRawBody_z,"
-      << "gyroBody_x,gyroBody_y,gyroBody_z,"
+      << "accBody_x,accBody_y,accBody_z,"
       << "forceDesired,"
       << "normalPre_x,normalPre_y,normalPre_z,"
       << "normalPost_x,normalPost_y,normalPost_z,"
@@ -523,9 +523,9 @@ private:
       acc_raw_body_[0] = msg->values[0];
       acc_raw_body_[1] = msg->values[1];
       acc_raw_body_[2] = msg->values[2];
-      gyro_raw_body_[0] = msg->values[3];
-      gyro_raw_body_[1] = msg->values[4];
-      gyro_raw_body_[2] = msg->values[5];
+      acc_body_[0] = msg->values[3];
+      acc_body_[1] = msg->values[4];
+      acc_body_[2] = msg->values[5];
     }
   }
   void velAttDesCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
@@ -665,7 +665,7 @@ private:
   std::array<double, 3> pos_vel_ = {qnan_debug(), qnan_debug(), qnan_debug()};
   std::array<double, 3> acc_ = {qnan_debug(), qnan_debug(), qnan_debug()};
   std::array<double, 3> acc_raw_body_ = {qnan_debug(), qnan_debug(), qnan_debug()};
-  std::array<double, 3> gyro_raw_body_ = {qnan_debug(), qnan_debug(), qnan_debug()};
+  std::array<double, 3> acc_body_ = {qnan_debug(), qnan_debug(), qnan_debug()};
   std::array<double, 3> vel_des_ = {qnan_debug(), qnan_debug(), qnan_debug()};
   std::array<double, 3> att_des_ = {qnan_debug(), qnan_debug(), qnan_debug()};
   double status_batt_v_ = qnan_debug();

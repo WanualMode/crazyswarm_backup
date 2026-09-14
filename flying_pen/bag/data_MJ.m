@@ -11,6 +11,7 @@ set(groot, 'defaultFigureRenderer', 'painters');
 
 %% 0) User config
 sample_hz = 20.0;  % Used only when the CSV has no t_sec column. Match crazyflies_debug.yaml logging frequency.
+imu_lpf_alpha = 0.01;  % First-order LPF: y(k) = y(k-1) + alpha * (x(k) - y(k-1)).
 axis_names = {'x', 'y', 'z'};
 att_names = {'roll', 'pitch', 'yaw'};
 
@@ -150,6 +151,14 @@ pos_vel = [
     local_get1(T, vars, "posVx"), ...
     local_get1(T, vars, "posVy"), ...
     local_get1(T, vars, "posVz")];
+acc_raw_body_g = [
+    local_get1(T, vars, "accRawBody_x"), ...
+    local_get1(T, vars, "accRawBody_y"), ...
+    local_get1(T, vars, "accRawBody_z")];
+acc_body_g = [
+    local_get1(T, vars, "accBody_x"), ...
+    local_get1(T, vars, "accBody_y"), ...
+    local_get1(T, vars, "accBody_z")];
 gyro_body_deg_s = [
     local_get1_fallback(T, vars, "gyroBody_x", "gyro_x"), ...
     local_get1_fallback(T, vars, "gyroBody_y", "gyro_y"), ...
@@ -225,6 +234,8 @@ motor_thrust = motor_thrust(valid_time, :);
 body_torque = body_torque(valid_time, :);
 state_vel = state_vel(valid_time, :);
 pos_vel = pos_vel(valid_time, :);
+acc_raw_body_g = acc_raw_body_g(valid_time, :);
+acc_body_g = acc_body_g(valid_time, :);
 gyro_body_deg_s = gyro_body_deg_s(valid_time, :);
 battery_voltage = battery_voltage(valid_time);
 status_battery_voltage = status_battery_voltage(valid_time);
@@ -247,6 +258,8 @@ offline_eta_hat = offline_eta_hat(valid_time);
 wall_true_normal_world = wall_true_normal_world(valid_time, :);
 wall_true_tangent1_world = wall_true_tangent1_world(valid_time, :);
 wall_true_tangent2_world = wall_true_tangent2_world(valid_time, :);
+acc_raw_body_g_lpf = local_first_order_lpf(acc_raw_body_g, imu_lpf_alpha);
+acc_body_g_lpf = local_first_order_lpf(acc_body_g, imu_lpf_alpha);
 wall_normal_frame_rpy = local_basis_to_rpy( ...
     wall_true_normal_world, wall_true_tangent1_world, wall_true_tangent2_world);
 mob_normal_frame_rpy_online_pure = local_force_to_normal_frame_rpy( ...
@@ -269,6 +282,8 @@ local_print_availability("per-propeller thrust", motor_thrust);
 local_print_availability("input body torque", body_torque);
 local_print_availability("state velocity", state_vel);
 local_print_availability("position velocity", pos_vel);
+local_print_availability("body accRaw", acc_raw_body_g);
+local_print_availability("body acc", acc_body_g);
 local_print_availability("body gyro", gyro_body_deg_s);
 local_print_availability("battery voltage", battery_voltage);
 local_print_availability("tilted wall position", wall_xyz);
@@ -296,9 +311,55 @@ fprintf("[INFO] Offline MOB mass %.6f kg, Kp %.6f, Kf %.3f, dt mode %s\n", ...
 fprintf("[INFO] Offline point-contact MOB Ktau %.3f, KpTau %.6f, Ke %.3f, eta gamma %.3f\n", ...
     offline_pc_Ktau, offline_pc_KpTau, offline_pc_Ke, offline_eta_gamma);
 
-%% 3) Plot: drone position
+%% 3) Plot: accRaw vs acc with first-order LPF
+imu_acc_xlim = [];                 % e.g. [10 80], [] keeps auto x-limits
+imu_acc_ylims = {[-0.05 0.05], [-0.05 0.05], [0.95 1.05]};      % x/y/z acceleration y-limits
+raw_line_width = 3.0;
+lpf_line_width = 1.0;
+raw_line_alpha = 0.20;             % Actual EdgeAlpha for the original-data curves.
+acc_raw_color = [0.8500, 0.3250, 0.0980];
+acc_color = [0.0000, 0.4470, 0.7410];
+
+if any(isfinite([acc_raw_body_g(:); acc_body_g(:)]))
+    figure('Name', 'Body AccRaw vs Acc', 'Color', 'w', 'Renderer', 'opengl', ...
+        'Position', [100 100 1400 850]);
+    tiledlayout(3, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+    for i = 1:3
+        ax = nexttile(2 * i - 1);
+        hold on;
+        local_plot_transparent_line(ax, time, acc_raw_body_g(:, i), ...
+            acc_raw_color, raw_line_alpha, raw_line_width);
+        local_plot_transparent_line(ax, time, acc_body_g(:, i), ...
+            acc_color, raw_line_alpha, raw_line_width);
+        plot(time, acc_raw_body_g_lpf(:, i), 'Color', acc_raw_color, 'LineWidth', lpf_line_width);
+        plot(time, acc_body_g_lpf(:, i), 'Color', acc_color, 'LineWidth', lpf_line_width);
+        grid on;
+        ax.Layer = 'top';
+        ylabel(sprintf('%s [G]', axis_names{i}));
+        title(sprintf('Original + LPF: %s axis', axis_names{i}));
+        legend({'accRaw original', 'acc original', 'accRaw LPF', 'acc LPF'}, 'Location', 'best');
+        local_apply_limits(ax, imu_acc_xlim, imu_acc_ylims{i});
+
+        ax_lpf = nexttile(2 * i);
+        hold on;
+        plot(time, acc_raw_body_g_lpf(:, i), 'Color', acc_raw_color, 'LineWidth', lpf_line_width);
+        plot(time, acc_body_g_lpf(:, i), 'Color', acc_color, 'LineWidth', lpf_line_width);
+        grid on;
+        ax_lpf.Layer = 'top';
+        ylabel(sprintf('%s [G]', axis_names{i}));
+        title(sprintf('LPF only: %s axis (alpha = %.3f)', axis_names{i}, imu_lpf_alpha));
+        legend({'accRaw LPF', 'acc LPF'}, 'Location', 'best');
+        local_apply_limits(ax_lpf, imu_acc_xlim, imu_acc_ylims{i});
+        if i == 3
+            xlabel(ax, 'time [s]');
+            xlabel(ax_lpf, 'time [s]');
+        end
+    end
+end
+
+%% 4) Plot: drone position
 drone_position_xlim = [];              % e.g. [10 80], [] keeps auto x-limits
-drone_position_ylims = {[], [], []};   % x/y/z y-limits
+drone_position_ylims = {[-0.05 0.05], [-0.05 0.05], [0.95 1.05]};   % x/y/z y-limits
 
 figure('Name', 'Drone Position', 'Color', 'w');
 tiledlayout(3, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
@@ -312,7 +373,7 @@ for i = 1:3
 end
 xlabel('time [s]');
 
-%% 4) Plot: end-effector position
+%% 5) Plot: end-effector position
 ee_position_xlim = [];              % e.g. [10 80], [] keeps auto x-limits
 ee_position_ylims = {[], [], []};   % x/y/z y-limits
 drone_ee_xyz_xlim = [];             % 3D x-axis limits
@@ -348,8 +409,8 @@ else
     legend({'drone', 'end-effector'}, 'Location', 'best');
 end
 
-%% 5) Plot: drone attitude
-drone_attitude_xlim = [];              % e.g. [10 80], [] keeps auto x-limits
+%% 6) Plot: drone attitude
+drone_attitude_xlim = [50 300];              % e.g. [10 80], [] keeps auto x-limits
 drone_attitude_ylims = {[], [], []};   % roll/pitch/yaw y-limits
 
 figure('Name', 'Drone Attitude', 'Color', 'w');
@@ -364,8 +425,8 @@ for i = 1:3
 end
 xlabel('time [s]');
 
-%% 6) Plot: per-propeller thrust
-thrust_xlim = [];      % e.g. [10 80], shared by propeller/total thrust plots
+%% 7) Plot: per-propeller thrust
+thrust_xlim = [31 1000];      % e.g. [10 80], shared by propeller/total thrust plots
 thrust_ylims = {[], []};  % {per-propeller, total}
 
 figure('Name', 'Per-Propeller Thrust', 'Color', 'w');
@@ -385,10 +446,10 @@ ylabel('total thrust [N]');
 title('Total thrust');
 local_apply_limits(gca, thrust_xlim, thrust_ylims{2});
 
-%% 7) Plot: input torque and online/offline MOB torque
-torque_xlim = [0 570];                         % e.g. [10 80], shared by torque plots
+%% 8) Plot: input torque and online/offline MOB torque
+torque_xlim = [50 350];                         % e.g. [10 80], shared by torque plots
 input_torque_ylims = {[-0.002 0.002], [-0.006 0.006], [-0.006 0.006]};        % x/y/z input torque y-limits
-mob_torque_ylims = {[-0.002 0.002], [-0.002 0.002], [-0.002 0.002]};          % x/y/z MOB overlay y-limits
+mob_torque_ylims = {[-0.001 0.001], [-0.001 0.001], [-0.001 0.001]};          % x/y/z MOB overlay y-limits
 
 if any(isfinite(body_torque(:)))
     figure('Name', 'Input Body Torque', 'Color', 'w');
@@ -430,9 +491,9 @@ if any(isfinite([mob_torque(:); offline_mob_torque_2nd(:)]))
     xlabel('time [s]');
 end
 
-%% 8) Plot: online/offline MOB force
-mob_force_xlim = [60 570];              % e.g. [10 80], [] keeps auto x-limits
-mob_force_ylims = {[-0.2 0.2], [-0.2 0.2], [-0.2 0.2]};   % x/y/z force y-limits
+%% 9) Plot: online/offline MOB force
+mob_force_xlim = [];              % e.g. [10 80], [] keeps auto x-limits
+mob_force_ylims = {[-0.02 0.02], [-0.02 0.02], [-0.02 0.02]};   % x/y/z force y-limits
 
 if any(isfinite([mob_force_none(:); offline_mob_force_none(:); offline_mob_eta_force(:); firmware_eta_force(:)]))
     figure('Name', 'MOB Force Online vs Offline Variants', 'Color', 'w');
@@ -468,9 +529,9 @@ if any(isfinite([mob_force_none(:); offline_mob_force_none(:); offline_mob_eta_f
     xlabel('time [s]');
 end
 
-%% 9) Plot: pipeline debug
-pipeline_debug_xlim = [];                         % shared by all pipeline-debug plots
-pipeline_force_ylims = {[], [], []};              % raw/corrected force x/y/z
+%% 10) Plot: pipeline debug
+pipeline_debug_xlim = [0 1000];                         % shared by all pipeline-debug plots
+pipeline_force_ylims = {[-0.05 0.05], [-0.05 0.05], [-0.05 0.05]};              % raw/corrected force x/y/z
 pipeline_correction_delta_ylims = {[]};            % correction-delta overlay
 pipeline_estimated_normal_ylims = {[-1.05 1.05]}; % estimated-normal overlay
 
@@ -511,10 +572,10 @@ if any(isfinite(normal_est(:)))
     local_apply_limits(gca, pipeline_debug_xlim, pipeline_estimated_normal_ylims{1});
 end
 
-%% 10) Plot: pure MOB vs eta_T-updated MOB and normalized wall-normal comparison
+%% 11) Plot: pure MOB vs eta_T-updated MOB and normalized wall-normal comparison
 pure_eta_axis_names = {'x', 'y', 'z'};
-pure_eta_comparison_xlim = [0 650];
-pure_eta_force_ylims = {[-0.14 0.02], [-0.14 0.02], [-0.14 0.02]};
+pure_eta_comparison_xlim = [90 600];
+pure_eta_force_ylims = {[-0.08 0.06], [-0.08 0.06], [-0.08 0.06]};
 pure_eta_normalized_ylims = {[-1.05 1.05], [-1.05 1.05], [-1.05 1.05]};
 
 mob_force_none_normalized = local_normalize_rows(mob_force_none);
@@ -572,9 +633,9 @@ if any(isfinite([mob_force_none(:); firmware_eta_force(:); wall_true_normal_worl
     xlabel(ax_normalized, 'time [s]');
 end
 
-%% 11) Plot: thrust effectiveness online/offline eta_T overlay
-eta_overlay_xlim = [];       % shared x-limit for this section
-eta_overlay_ylims = {[]};    % eta_T overlay
+%% 12) Plot: thrust effectiveness online/offline eta_T overlay
+eta_overlay_xlim = [31 1000];       % shared x-limit for this section
+eta_overlay_ylims = {[1.1 0.85]};    % eta_T overlay
 
 if any(isfinite([offline_eta_hat; firmware_eta_hat]))
     figure('Name', 'Thrust Effectiveness Online Offline Eta_T Overlay', 'Color', 'w');
@@ -596,7 +657,7 @@ if any(isfinite([offline_eta_hat; firmware_eta_hat]))
     local_apply_limits(gca, eta_overlay_xlim, eta_overlay_ylims{1});
 end
 
-%% 12) Plot: firmware thrust effectiveness debug
+%% 13) Plot: firmware thrust effectiveness debug
 firmware_eta_debug_xlim = ([0 50]);        % shared with eta_T estimate
 firmware_eta_force_ylims = {[-5 5], [-5 5], [-5 5]};  % corrected/matched force y-limits
 firmware_eta_residual_ylims = {[], [], []};  % torque residual y-limits
@@ -639,7 +700,7 @@ if any(isfinite([firmware_eta_match_force(:); firmware_eta_force(:); firmware_et
     xlabel('time [s]');
 end
 
-%% 13) Plot: tilted wall normal-frame RPY
+%% 14) Plot: tilted wall normal-frame RPY
 wall_normal_rpy_xlim = ([10 550]);             % e.g. [10 80], [] keeps auto x-limits
 wall_normal_rpy_ylims = {[-0.5 0.5], [-0.5 0.5], [-0.5 0.5]};              % roll/pitch/yaw y-limits
 
@@ -683,7 +744,7 @@ if any(isfinite([wall_normal_frame_rpy(:); mob_normal_frame_rpy_online_pure(:); 
     xlabel('time [s]');
 end
 
-%% 14) Plot: battery voltage
+%% 15) Plot: battery voltage
 battery_xlim = [];   % e.g. [10 80], [] keeps auto x-limits
 battery_ylims = {[]};   % battery-voltage plot; e.g. {[3.2 4.2]}
 
@@ -709,7 +770,7 @@ if isempty(legend_entries), legend_entries = {'battery voltage'}; end
 legend(legend_entries, 'Location', 'best');
 local_apply_limits(gca, battery_xlim, battery_ylims{1});
 
-%% 15) Plot: tilted wall pose
+%% 16) Plot: tilted wall pose
 wall_pose_xlim = [];                         % shared by all wall time plots
 wall_position_ylims = {[], [], []};          % x/y/z position y-limits
 wall_attitude_ylims = {[], [], []};          % roll/pitch/yaw y-limits
@@ -772,7 +833,7 @@ if any(isfinite(wall_xyz(:)))
     local_apply_limits(gca, wall_pose_xlim, ee_to_wall_x_distance_ylims{1});
 end
 
-%% 16) Plot: drone and tilted wall roll/pitch
+%% 17) Plot: drone and tilted wall roll/pitch
 drone_wall_rp_xlim = [];            % shared by roll/pitch comparison plots
 drone_wall_rp_ylims = {[], []};     % {roll, pitch}
 
@@ -830,6 +891,35 @@ function x = local_get1_any(T, vars, names)
         y = local_get1(T, vars, name);
         x(missing) = y(missing);
     end
+end
+
+function y = local_first_order_lpf(x, alpha)
+    if ~(isnumeric(alpha) && isscalar(alpha) && isfinite(alpha) && alpha > 0.0 && alpha <= 1.0)
+        error("LPF alpha must be in the interval (0, 1].");
+    end
+
+    y = nan(size(x));
+    for col = 1:size(x, 2)
+        state = nan;
+        for row = 1:size(x, 1)
+            sample = x(row, col);
+            if ~isfinite(sample)
+                continue;
+            end
+            if ~isfinite(state)
+                state = sample;
+            else
+                state = state + alpha * (sample - state);
+            end
+            y(row, col) = state;
+        end
+    end
+end
+
+function h = local_plot_transparent_line(ax, x, y, color, alpha, line_width)
+    h = patch(ax, 'XData', x(:), 'YData', y(:), ...
+        'FaceColor', 'none', 'EdgeColor', color, 'EdgeAlpha', alpha, ...
+        'LineWidth', line_width);
 end
 
 function ee_pos = local_compute_ee_position_world(pose_xyz, pose_rpy, ee_offset_body)
