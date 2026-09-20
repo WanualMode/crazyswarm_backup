@@ -207,6 +207,7 @@ normal_est = [
     local_get1(T, vars, "normalEst_x"), ...
     local_get1(T, vars, "normalEst_y"), ...
     local_get1(T, vars, "normalEst_z")];
+force_desired = local_get1(T, vars, "forceDesired");
 contact_force_delta = firmware_eta_force - mob_force_none;
 
 offline_mob_force_none = local_compute_offline_pure_mob( ...
@@ -250,6 +251,7 @@ firmware_eta_match_force = firmware_eta_match_force(valid_time, :);
 firmware_eta_residual = firmware_eta_residual(valid_time, :);
 firmware_eta_force = firmware_eta_force(valid_time, :);
 normal_est = normal_est(valid_time, :);
+force_desired = force_desired(valid_time);
 contact_force_delta = contact_force_delta(valid_time, :);
 offline_mob_force_none = offline_mob_force_none(valid_time, :);
 offline_mob_torque_2nd = offline_mob_torque_2nd(valid_time, :);
@@ -306,6 +308,7 @@ local_print_availability("firmware eta_T matched force", firmware_eta_match_forc
 local_print_availability("firmware eta_T residual", firmware_eta_residual);
 local_print_availability("firmware eta_T corrected force", firmware_eta_force);
 local_print_availability("estimated normal", normal_est);
+local_print_availability("force command", force_desired);
 fprintf("[INFO] Offline MOB mass %.6f kg, Kp %.6f, Kf %.3f, dt mode %s\n", ...
     offline_mob_mass_kg, offline_mob_Kp, offline_mob_Kf, char(offline_mob_dt_mode));
 fprintf("[INFO] Offline point-contact MOB Ktau %.3f, KpTau %.6f, Ke %.3f, eta gamma %.3f\n", ...
@@ -493,7 +496,7 @@ end
 
 %% 9) Plot: online/offline MOB force
 mob_force_xlim = [];              % e.g. [10 80], [] keeps auto x-limits
-mob_force_ylims = {[-0.02 0.02], [-0.02 0.02], [-0.02 0.02]};   % x/y/z force y-limits
+mob_force_ylims = {[-0.05 0.02], [-0.05 0.02], [-0.05 0.02]};   % x/y/z force y-limits
 
 if any(isfinite([mob_force_none(:); offline_mob_force_none(:); offline_mob_eta_force(:); firmware_eta_force(:)]))
     figure('Name', 'MOB Force Online vs Offline Variants', 'Color', 'w');
@@ -527,6 +530,58 @@ if any(isfinite([mob_force_none(:); offline_mob_force_none(:); offline_mob_eta_f
         local_apply_limits(ax, mob_force_xlim, mob_force_ylims{i});
     end
     xlabel('time [s]');
+end
+
+%% 9.1) Plot: MOB force vs force command
+% forceDesired is a scalar command along the vehicle's commanded contact
+% direction. Rotate the world-frame MOB estimate into the yaw-aligned body
+% frame and use -fHat_x so a positive preload command has the same sign.
+mob_force_cmd_xlim = [];  % e.g. [38 82], [] keeps auto x-limits
+mob_force_cmd_ylims = {[], [], []};
+
+yaw = pose_rpy(:, 3);
+cy = cos(yaw);
+sy = sin(yaw);
+mob_force_yaw_body = [ ...
+    cy .* mob_force_none(:, 1) + sy .* mob_force_none(:, 2), ...
+   -sy .* mob_force_none(:, 1) + cy .* mob_force_none(:, 2), ...
+    mob_force_none(:, 3)];
+mob_force_cmd_compare = [ ...
+    -mob_force_yaw_body(:, 1), ...
+     mob_force_yaw_body(:, 2), ...
+     mob_force_yaw_body(:, 3)];
+
+if any(isfinite([force_desired(:); mob_force_cmd_compare(:)]))
+    figure('Name', 'MOB Force vs Force Command', 'Color', 'w');
+    tiledlayout(3, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
+    mob_force_cmd_axes = gobjects(3, 1);
+    for i = 1:3
+        ax = nexttile;
+        mob_force_cmd_axes(i) = ax;
+        hold(ax, 'on');
+        legend_entries = {};
+        if i == 1 && any(isfinite(force_desired))
+            plot(ax, time, force_desired, '--', 'LineWidth', 2.0);
+            legend_entries{end+1} = 'force command';
+        end
+        if any(isfinite(mob_force_cmd_compare(:, i)))
+            plot(ax, time, mob_force_cmd_compare(:, i), 'LineWidth', 1.4);
+            if i == 1
+                legend_entries{end+1} = 'MOB -fHat_x';
+            else
+                legend_entries{end+1} = sprintf('MOB fHat_%s', axis_names{i});
+            end
+        end
+        grid(ax, 'on');
+        ylabel(ax, sprintf('%s [N]', axis_names{i}));
+        title(ax, sprintf('MOB force vs force command: yaw-body %s', axis_names{i}));
+        if ~isempty(legend_entries)
+            legend(ax, legend_entries, 'Location', 'best');
+        end
+        local_apply_limits(ax, mob_force_cmd_xlim, mob_force_cmd_ylims{i});
+    end
+    xlabel(mob_force_cmd_axes(end), 'time [s]');
+    linkaxes(mob_force_cmd_axes, 'x');
 end
 
 %% 10) Plot: pipeline debug
@@ -574,7 +629,7 @@ end
 
 %% 11) Plot: pure MOB vs eta_T-updated MOB and normalized wall-normal comparison
 pure_eta_axis_names = {'x', 'y', 'z'};
-pure_eta_comparison_xlim = [90 600];
+pure_eta_comparison_xlim = [300 800];
 pure_eta_force_ylims = {[-0.08 0.06], [-0.08 0.06], [-0.08 0.06]};
 pure_eta_normalized_ylims = {[-1.05 1.05], [-1.05 1.05], [-1.05 1.05]};
 

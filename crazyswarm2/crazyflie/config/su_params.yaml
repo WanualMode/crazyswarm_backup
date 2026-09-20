@@ -3,12 +3,12 @@ robot_types:
     firmware_params:
       su_wrench:
         mass: 0.045000  # observer mass model [kg]
-        comOffX: -0.000737  # body-frame CoM offset x [m]
-        comOffY: -0.000230  # body-frame CoM offset y [m]
+        comOffX: -0.000719  # body-frame CoM offset x [m]
+        comOffY: -0.000216  # body-frame CoM offset y [m]
         comOffZ: 0.0  # body-frame CoM offset z [m]
-        rOffX: 0.09
+        rOffX: 0.085
         rOffY: 0.0
-        rOffZ: 0.035
+        rOffZ: 0.020
 
       su_position:
         traj1Shape: 1  # 0=None, 1=Circle, 2=Square
@@ -17,8 +17,8 @@ robot_types:
         traj1Period: 40.0  # [s]
 
         preloadEn: 1  # 0: velocity-mode yaw follows server command, 1: velocity-mode yaw aligns to estimated normal direction
-        preloadGf: 15.0  # effective gain from normal force error to normal velocity command
-        preloadGv: 5.0  # effective gain from normal velocity leakage to command
+        preloadGf: 8.0  # effective gain from normal force error to normal velocity command
+        preloadGv: 0.0  # effective gain from normal velocity leakage to command
         preloadNu: 0.3  # [m/s], symmetric saturation bound for normal velocity command
 
         alphaMin: 0.1  # [0..1], minimum alpha_frame for tangential velocity command gating
