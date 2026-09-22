@@ -362,7 +362,7 @@ fprintf("[INFO] Offline MOB mass %.6f kg, Kp %.6f, Kf %.3f, dt mode %s\n", ...
 fprintf("[INFO] Offline point-contact MOB Ktau %.3f, KpTau %.6f, Ke %.3f, eta gamma %.3f\n", ...
     offline_pc_Ktau, offline_pc_KpTau, offline_pc_Ke, offline_eta_gamma);
 
-%% 3) Plot: accRaw vs acc with first-order LPF
+%% 3.0) Plot: accRaw vs acc with first-order LPF
 imu_acc_xlim = [];                 % e.g. [10 80], [] keeps auto x-limits
 imu_acc_ylims = {[-0.05 0.05], [-0.05 0.05], [0.95 1.05]};      % x/y/z acceleration y-limits
 raw_line_width = 3.0;
@@ -406,6 +406,82 @@ if any(isfinite([acc_raw_body_g(:); acc_body_g(:)]))
             xlabel(ax_lpf, 'time [s]');
         end
     end
+end
+
+%% 3.1) Plot: estimated normal vector and top-down EE trajectory
+estimated_normal_xlim = [225 406];        % e.g. [10 80], [] keeps auto x-limits
+estimated_normal_ylims = {[-1.05 1.05], [-1.05 1.05], [-1.05 1.05]};
+normal_topdown_xlim = [];          % world x limits [m], [] keeps auto limits
+normal_topdown_ylim = [];          % world y limits [m], [] keeps auto limits
+normal_topdown_arrow_length_m = 0.05;
+normal_topdown_max_arrows = 100;   % subsample arrows to keep the trajectory readable
+normal_topdown_contact_force_threshold_n = 0.005;
+normal_topdown_force_command_threshold_n = 0.0;
+normal_topdown_contact_min_samples = 3;  % consecutive samples required to declare contact
+
+if any(isfinite(normal_est(:)))
+    figure('Name', 'Estimated Normal Vector', 'Color', 'w', ...
+        'Position', [100 100 1400 850]);
+    tiledlayout(3, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+    normal_axes = gobjects(3, 1);
+    for i = 1:3
+        ax = nexttile(2 * i - 1);
+        normal_axes(i) = ax;
+        plot(ax, time, normal_est(:, i), 'LineWidth', 1.3);
+        grid(ax, 'on');
+        ylabel(ax, sprintf('n_%s [-]', axis_names{i}));
+        title(ax, sprintf('Firmware estimated normal: %s axis', axis_names{i}));
+        local_apply_limits(ax, estimated_normal_xlim, estimated_normal_ylims{i});
+    end
+    xlabel(normal_axes(end), 'time [s]');
+    linkaxes(normal_axes, 'x');
+
+    ax_topdown = nexttile(2, [3 1]);
+    hold(ax_topdown, 'on');
+    contact_force_norm = sqrt(sum(firmware_contact_force.^2, 2));
+    contact_candidate = isfinite(force_desired) & ...
+        (force_desired > normal_topdown_force_command_threshold_n) & ...
+        isfinite(contact_force_norm) & ...
+        (contact_force_norm >= normal_topdown_contact_force_threshold_n);
+    contact_start_idx = [];
+    if numel(contact_candidate) >= normal_topdown_contact_min_samples
+        contact_run_length = conv(double(contact_candidate), ...
+            ones(normal_topdown_contact_min_samples, 1), 'valid');
+        contact_start_idx = find( ...
+            contact_run_length >= normal_topdown_contact_min_samples, 1, 'first');
+    end
+    contact_phase = false(size(time));
+    if ~isempty(contact_start_idx)
+        contact_phase(contact_start_idx:end) = true;
+    end
+
+    valid_ee_xy = contact_phase & all(isfinite(ee_xyz(:, 1:2)), 2);
+    plot(ax_topdown, ee_xyz(valid_ee_xy, 1), ee_xyz(valid_ee_xy, 2), ...
+        '-', 'LineWidth', 1.3, 'DisplayName', 'end-effector trajectory');
+
+    valid_arrow = valid_ee_xy & all(isfinite(normal_est(:, 1:2)), 2);
+    arrow_indices = find(valid_arrow);
+    if ~isempty(arrow_indices)
+        arrow_stride = max(1, ceil(numel(arrow_indices) / normal_topdown_max_arrows));
+        arrow_indices = arrow_indices(1:arrow_stride:end);
+        quiver(ax_topdown, ee_xyz(arrow_indices, 1), ee_xyz(arrow_indices, 2), ...
+            normal_topdown_arrow_length_m .* normal_est(arrow_indices, 1), ...
+            normal_topdown_arrow_length_m .* normal_est(arrow_indices, 2), ...
+            0, 'LineWidth', 1.0, 'DisplayName', 'estimated normal (x-y)');
+    end
+    grid(ax_topdown, 'on');
+    axis(ax_topdown, 'equal');
+    xlabel(ax_topdown, 'world x [m]');
+    ylabel(ax_topdown, 'world y [m]');
+    if isempty(contact_start_idx)
+        title(ax_topdown, 'Top-down EE trajectory: contact not detected');
+    else
+        title(ax_topdown, sprintf( ...
+            'Top-down EE trajectory and estimated normal (contact from %.2f s)', ...
+            time(contact_start_idx)));
+    end
+    legend(ax_topdown, 'Location', 'best');
+    local_apply_limits(ax_topdown, normal_topdown_xlim, normal_topdown_ylim);
 end
 
 %% 4) Plot: drone position
@@ -760,7 +836,6 @@ end
 pipeline_debug_xlim = [0 1000];                         % shared by all pipeline-debug plots
 pipeline_force_ylims = {[-0.05 0.05], [-0.05 0.05], [-0.05 0.05]};              % raw/corrected force x/y/z
 pipeline_correction_delta_ylims = {[]};            % correction-delta overlay
-pipeline_estimated_normal_ylims = {[-1.05 1.05]}; % estimated-normal overlay
 
 if any(isfinite([mob_force_none(:); firmware_contact_force(:)]))
     figure('Name', 'Raw MOB vs Corrected Contact Force', 'Color', 'w');
@@ -786,17 +861,6 @@ if any(isfinite([mob_force_none(:); firmware_contact_force(:)]))
     title('eta_T force correction delta');
     legend({'deltaFx', 'deltaFy', 'deltaFz'}, 'Location', 'best');
     local_apply_limits(gca, pipeline_debug_xlim, pipeline_correction_delta_ylims{1});
-end
-
-if any(isfinite(normal_est(:)))
-    figure('Name', 'Estimated Normal Vector', 'Color', 'w');
-    plot(time, normal_est, 'LineWidth', 1.3);
-    grid on;
-    xlabel('time [s]');
-    ylabel('normal component [-]');
-    title('Firmware estimated normal');
-    legend({'normalX', 'normalY', 'normalZ'}, 'Location', 'best');
-    local_apply_limits(gca, pipeline_debug_xlim, pipeline_estimated_normal_ylims{1});
 end
 
 %% 11) Plot: pure MOB vs eta_T-updated MOB and normalized wall-normal comparison

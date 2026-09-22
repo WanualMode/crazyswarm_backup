@@ -3,8 +3,8 @@ robot_types:
     firmware_params:
       su_wrench:
         mass: 0.045000  # observer mass model [kg]
-        comOffX: -0.000282  # body-frame CoM offset x [m]
-        comOffY: 0.000075  # body-frame CoM offset y [m]
+        comOffX: 0.000088  # body-frame CoM offset x [m]
+        comOffY: -0.000029  # body-frame CoM offset y [m]
         comOffZ: 0.0  # body-frame CoM offset z [m]
         rOffX: 0.085
         rOffY: 0.0
@@ -21,12 +21,10 @@ robot_types:
         preloadGv: 0.0  # effective gain from normal velocity leakage to command
         preloadNu: 0.3  # [m/s], symmetric saturation bound for normal velocity command
 
-        alphaMin: 0.1  # [0..1], minimum alpha_frame for tangential velocity command gating
-        alphaBar: -0.007  # [+] omega_n bar, [-] normal_velocity_leakage bar, 0 disables alpha_frame gating
-
-        normBeta: 1.5  # [1/s] beta ≈ 2*pi*f_c, decay rate of the normal-axis memory matrix
-        normEpsG: 100.0004  # [m^2/s^2], velocity-projection regularization epsilon_g
-        normEpsF: 100.015  # [N], minimum force evidence norm epsilon_f
+        normBeta: 6.0  # [1/s] beta ≈ 2*pi*f_c, decay rate of the normal-axis memory matrix (normal이 굼뜨면 베타 올려)
+        normGamma: 4.0  # [1/s] normal-estimate tracking gain (너무 예민하면 감마낮춰)
+        normEpsG: 0.0004  # [m^2/s^2], velocity-projection regularization epsilon_g
+        normEpsF: 0.010  # [N], minimum force evidence norm epsilon_f
 
         epsilonFMin: 1.01  # [N], yaw-alignment smoothing starts when |F_xy| exceeds this
         epsilonFMax: 2.025  # [N], yaw-alignment reaches full weight when |F_xy| exceeds this
