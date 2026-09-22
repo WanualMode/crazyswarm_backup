@@ -25,35 +25,39 @@ robot_types:
         status:
           frequency: 1
       custom_topics:
-        # Per-motor thrust estimate used for unit checks.
+        # Inputs used by data_MJ.m for offline MOB reconstruction and tuning plots.
         cf_su_motor_thrust:
           frequency: 20
           vars: [suWrenchObs.f1, suWrenchObs.f2, suWrenchObs.f3, suWrenchObs.f4]
-        # Body-frame input torque used for CoM hover calibration.
         cf_su_body_torque:
           frequency: 20
           vars: [suWrenchObs.tauInBx, suWrenchObs.tauInBy, suWrenchObs.tauInBz]
-        # Velocity from firmware stateEstimate + position differentiation helper.
         cf_su_vel_pair:
           frequency: 20
           vars: [suWrenchObs.stateVx, suWrenchObs.stateVy, suWrenchObs.stateVz, suWrenchObs.posVx, suWrenchObs.posVy, suWrenchObs.posVz]
-        # Raw and processed body-frame acceleration, paired axis-by-axis.
+        cf_gyro_body:
+          frequency: 20
+          vars: [gyro.x, gyro.y, gyro.z]
         cf_imu_raw_pair:
           frequency: 20
           vars: [accRaw.x, accRaw.y, accRaw.z, acc.x, acc.y, acc.z]
         cf_su_acc_normal:
           frequency: 20
           vars: [suWrenchObs.accWx, suWrenchObs.accWy, suWrenchObs.accWz, suPosRef.nEstX, suPosRef.nEstY, suPosRef.nEstZ]
-        cf_su_normal_debug:
-          frequency: 20
-          vars: [suPosRef.nPreX, suPosRef.nPreY, suPosRef.nPreZ, suPosRef.nPostX, suPosRef.nPostY, suPosRef.nPostZ]
-        # Flying Pen force pipeline. Keep each block within the Crazyflie log packet limit.
-        cf_mob_raw:
-          frequency: 20
-          vars: [suWrenchObs.fHatWx, suWrenchObs.fHatWy, suWrenchObs.fHatWz, suWrenchObs.tauLWx, suWrenchObs.tauLWy, suWrenchObs.tauLWz]
+        # cf_su_normal_debug:
+        #   frequency: 20
+        #   vars: [suPosRef.nPreX, suPosRef.nPreY, suPosRef.nPreZ, suPosRef.nPostX, suPosRef.nPostY, suPosRef.nPostZ]
+
+        # Online force recovery pipeline: f_hat_l -> f_bar_l -> f_hat_c.
+        # cf_mob_raw:
+        #   frequency: 20
+        #   vars: [suWrenchObs.fHatWx, suWrenchObs.fHatWy, suWrenchObs.fHatWz]
+        # cf_force_bar:
+        #   frequency: 20
+        #   vars: [suThrustEff.fBarX, suThrustEff.fBarY, suThrustEff.fBarZ, suThrustEff.etaHat]
         cf_contact_force:
           frequency: 20
-          vars: [suThrustEff.corrFx, suThrustEff.corrFy, suThrustEff.corrFz, suThrustEff.etaHat]
+          vars: [suThrustEff.fContactX, suThrustEff.fContactY, suThrustEff.fContactZ]
         # cf_su_normal_metrics:
         #   frequency: 20
         #   vars: [suPosRef.vEeX, suPosRef.vEeY, suPosRef.vEeZ, suPosRef.omgN, suPosRef.nVelLeak]
@@ -66,9 +70,9 @@ robot_types:
         cf_ctrl_misc:
           frequency: 10
           vars: [pm.vbat, ctrltarget.x, ctrltarget.y, ctrltarget.z]
-        cf_stabilizer_timing:
-          frequency: 20
-          vars: [stabilizer.loopDtUs, stabilizer.loopDtUsMax]
+        # cf_stabilizer_timing:
+        #   frequency: 20
+        #   vars: [stabilizer.loopDtUs, stabilizer.loopDtUsMax]
 #         # Desired translational velocity from the position controller.
 
 
@@ -82,7 +86,7 @@ robot_types:
         extPosStdDev: 1e-3
         extQuatStdDev: 0.5e-1
       imu_sensors:
-        accTrimRoll: -0.72
+        accTrimRoll: -0.90
         accTrimPitch: 0.34
 
 

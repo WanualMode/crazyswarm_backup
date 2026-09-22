@@ -29,7 +29,7 @@ sitl_su_params_path = fullfile(getenv("HOME"), "sitl_ws", "src", ...
 manual_calib_mass_kg = [0.045];              % e.g. 0.047311
 manual_calib_com_offset_body = [0.00 0.00];      % e.g. [-0.000486, 0.000093, 0.0]
 
-yaml_mob_mass_kg = local_read_yaml_scalar(su_params_path, "mass", 0.047311);
+yaml_mob_mass_kg = local_read_yaml_scalar(su_params_path, "mass", 0.045);
 yaml_com_offset_body = [
     local_read_yaml_scalar(su_params_path, "comOffX", 0.0), ...
     local_read_yaml_scalar(su_params_path, "comOffY", 0.0), ...
@@ -69,7 +69,7 @@ offline_eta_gamma = 20.0;               % adaptation gain; larger tracks faster/
 offline_eta_rho = 0.1;                  % regularization/leakage; larger damps eta_T motion
 offline_eta_initial = 1.0;              % initial thrust effectiveness estimate
 offline_inertia_diag = [2.3951e-5, 2.3951e-5, 3.2347e-5];  % [Jxx Jyy Jzz]
-boom_tip_offset_body = [0.09, 0.0, 0.035];  % [m] body-frame boom tip: +x 90 mm, +z 35 mm
+boom_tip_offset_body = [0.085, 0.0, 0.020];  % [m] body-frame boom tip: +x 90 mm, +z 35 mm
 offline_contact_offset_body = boom_tip_offset_body;
 offline_arm_xy = 0.7071067811865476 * 0.050;  % cf21bl ARM_LENGTH
 offline_k_tau_motor = 0.00569278844371417;
@@ -125,6 +125,10 @@ pose_xyz = [
     local_get1(T, vars, "pose_x"), ...
     local_get1(T, vars, "pose_y"), ...
     local_get1(T, vars, "pose_z")];
+fw_cmd_xyz = [
+    local_get1(T, vars, "fwCmd_x"), ...
+    local_get1(T, vars, "fwCmd_y"), ...
+    local_get1(T, vars, "fwCmd_z")];
 
 pose_rpy = [
     local_get1(T, vars, "pose_roll"), ...
@@ -147,6 +151,10 @@ state_vel = [
     local_get1(T, vars, "stateVx"), ...
     local_get1(T, vars, "stateVy"), ...
     local_get1(T, vars, "stateVz")];
+vel_des = [
+    local_get1(T, vars, "velDes_vx"), ...
+    local_get1(T, vars, "velDes_vy"), ...
+    local_get1(T, vars, "velDes_vz")];
 pos_vel = [
     local_get1(T, vars, "posVx"), ...
     local_get1(T, vars, "posVy"), ...
@@ -182,15 +190,26 @@ wall_rpy = local_quat_xyzw_to_rpy(wall_quat_xyzw);
     local_compute_wall_basis_world(wall_quat_xyzw, wall_true_normal_body, ...
     wall_true_tangent1_body, wall_true_tangent2_body);
 
-mob_force_none = [
-    local_get1_any(T, vars, ["rawMobFx", "mobForceFinal_x", "mobForceNone_x"]), ...
-    local_get1_any(T, vars, ["rawMobFy", "mobForceFinal_y", "mobForceNone_y"]), ...
-    local_get1_any(T, vars, ["rawMobFz", "mobForceFinal_z", "mobForceNone_z"])];
+firmware_raw_force = [
+    local_get1(T, vars, "rawMobFx"), ...
+    local_get1(T, vars, "rawMobFy"), ...
+    local_get1(T, vars, "rawMobFz")];
+firmware_force_bar = [
+    local_get1(T, vars, "forceBarFx"), ...
+    local_get1(T, vars, "forceBarFy"), ...
+    local_get1(T, vars, "forceBarFz")];
+firmware_contact_force = [
+    local_get1(T, vars, "contactFx"), ...
+    local_get1(T, vars, "contactFy"), ...
+    local_get1(T, vars, "contactFz")];
+firmware_eta_hat = local_get1(T, vars, "etaHat");
+
+% Existing pure-MOB analysis sections use this historical variable name.
+mob_force_none = firmware_raw_force;
 mob_torque = [
     local_get1_any(T, vars, ["rawMobTx", "mobTorque_x"]), ...
     local_get1_any(T, vars, ["rawMobTy", "mobTorque_y"]), ...
     local_get1_any(T, vars, ["rawMobTz", "mobTorque_z"])];
-firmware_eta_hat = local_get1_any(T, vars, ["etaHat", "thrustEffEtaHat"]);
 firmware_eta_match_force = [
     local_get1(T, vars, "thrustEffMatchFx"), ...
     local_get1(T, vars, "thrustEffMatchFy"), ...
@@ -199,16 +218,12 @@ firmware_eta_residual = [
     local_get1(T, vars, "thrustEffEpsTx"), ...
     local_get1(T, vars, "thrustEffEpsTy"), ...
     local_get1(T, vars, "thrustEffEpsTz")];
-firmware_eta_force = [
-    local_get1_any(T, vars, ["contactFx", "thrustEffCorrFx"]), ...
-    local_get1_any(T, vars, ["contactFy", "thrustEffCorrFy"]), ...
-    local_get1_any(T, vars, ["contactFz", "thrustEffCorrFz"])];
 normal_est = [
     local_get1(T, vars, "normalEst_x"), ...
     local_get1(T, vars, "normalEst_y"), ...
     local_get1(T, vars, "normalEst_z")];
 force_desired = local_get1(T, vars, "forceDesired");
-contact_force_delta = firmware_eta_force - mob_force_none;
+contact_force_delta = firmware_contact_force - firmware_raw_force;
 
 offline_mob_force_none = local_compute_offline_pure_mob( ...
     time, pose_rpy, motor_thrust, state_vel, pos_vel, ...
@@ -226,14 +241,30 @@ offline_mob_force_none = local_compute_offline_pure_mob( ...
     offline_arm_xy, offline_k_tau_motor, offline_motor_dir, ...
     offline_mob_use_pos_velocity, offline_mob_dt_mode, offline_mob_fixed_dt);
 
+% Independent offline reference branch transplanted from data_SU.m.
+% Pipeline: f_hat_l -> f_bar_l -> f_hat_c. The existing offline and online
+% branches above are intentionally left unchanged.
+[offline_new_raw_force, offline_new_raw_torque, offline_new_eta_hat, ...
+    offline_new_force_bar, offline_new_torque_bar, offline_new_contact_force] = ...
+    local_compute_offline_new_force_recovery( ...
+    time, pose_rpy, motor_thrust, state_vel, pos_vel, gyro_body_deg_s, ...
+    offline_mob_mass_kg, offline_mob_gravity_ms2, offline_mob_Kp, offline_mob_Kf, ...
+    offline_pc_KpTau, offline_pc_Ktau, offline_pc_alpha, ...
+    offline_eta_gamma, offline_eta_rho, offline_eta_initial, ...
+    offline_inertia_diag, offline_com_offset_body, offline_contact_offset_body, ...
+    offline_arm_xy, offline_k_tau_motor, offline_motor_dir, ...
+    offline_mob_use_pos_velocity, offline_mob_dt_mode, offline_mob_fixed_dt);
+
 valid_time = isfinite(time);
 time = time(valid_time);
 pose_xyz = pose_xyz(valid_time, :);
+fw_cmd_xyz = fw_cmd_xyz(valid_time, :);
 pose_rpy = pose_rpy(valid_time, :);
 ee_xyz = ee_xyz(valid_time, :);
 motor_thrust = motor_thrust(valid_time, :);
 body_torque = body_torque(valid_time, :);
 state_vel = state_vel(valid_time, :);
+vel_des = vel_des(valid_time, :);
 pos_vel = pos_vel(valid_time, :);
 acc_raw_body_g = acc_raw_body_g(valid_time, :);
 acc_body_g = acc_body_g(valid_time, :);
@@ -246,10 +277,12 @@ wall_quat_xyzw = wall_quat_xyzw(valid_time, :);
 wall_rpy = wall_rpy(valid_time, :);
 mob_force_none = mob_force_none(valid_time, :);
 mob_torque = mob_torque(valid_time, :);
+firmware_raw_force = firmware_raw_force(valid_time, :);
+firmware_force_bar = firmware_force_bar(valid_time, :);
+firmware_contact_force = firmware_contact_force(valid_time, :);
 firmware_eta_hat = firmware_eta_hat(valid_time);
 firmware_eta_match_force = firmware_eta_match_force(valid_time, :);
 firmware_eta_residual = firmware_eta_residual(valid_time, :);
-firmware_eta_force = firmware_eta_force(valid_time, :);
 normal_est = normal_est(valid_time, :);
 force_desired = force_desired(valid_time);
 contact_force_delta = contact_force_delta(valid_time, :);
@@ -257,6 +290,12 @@ offline_mob_force_none = offline_mob_force_none(valid_time, :);
 offline_mob_torque_2nd = offline_mob_torque_2nd(valid_time, :);
 offline_mob_eta_force = offline_mob_eta_force(valid_time, :);
 offline_eta_hat = offline_eta_hat(valid_time);
+offline_new_raw_force = offline_new_raw_force(valid_time, :);
+offline_new_raw_torque = offline_new_raw_torque(valid_time, :);
+offline_new_eta_hat = offline_new_eta_hat(valid_time);
+offline_new_force_bar = offline_new_force_bar(valid_time, :);
+offline_new_torque_bar = offline_new_torque_bar(valid_time, :);
+offline_new_contact_force = offline_new_contact_force(valid_time, :);
 wall_true_normal_world = wall_true_normal_world(valid_time, :);
 wall_true_tangent1_world = wall_true_tangent1_world(valid_time, :);
 wall_true_tangent2_world = wall_true_tangent2_world(valid_time, :);
@@ -271,18 +310,20 @@ mob_normal_frame_rpy_offline_pure = local_force_to_normal_frame_rpy( ...
 mob_normal_frame_rpy_offline_eta = local_force_to_normal_frame_rpy( ...
     offline_mob_eta_force, wall_true_normal_world, wall_true_tangent1_world);
 mob_normal_frame_rpy_firmware_eta = local_force_to_normal_frame_rpy( ...
-    firmware_eta_force, wall_true_normal_world, wall_true_tangent1_world);
+    firmware_contact_force, wall_true_normal_world, wall_true_tangent1_world);
 
 fprintf("[INFO] EE offset body [m] = [%.4f %.4f %.4f]\n", ee_offset_body);
 fprintf("[INFO] Offline calibration source = %s\n", char(offline_calib_source));
 fprintf("[INFO] Offline calibration mass/com = %.6f kg, [%.6f %.6f %.6f] m\n", ...
     offline_mob_mass_kg, offline_com_offset_body);
 local_print_availability("drone position", pose_xyz);
+local_print_availability("firmware drone position setpoint", fw_cmd_xyz);
 local_print_availability("end-effector position", ee_xyz);
 local_print_availability("drone attitude", pose_rpy);
 local_print_availability("per-propeller thrust", motor_thrust);
 local_print_availability("input body torque", body_torque);
 local_print_availability("state velocity", state_vel);
+local_print_availability("commanded velocity", vel_des);
 local_print_availability("position velocity", pos_vel);
 local_print_availability("body accRaw", acc_raw_body_g);
 local_print_availability("body acc", acc_body_g);
@@ -298,15 +339,22 @@ local_print_availability("tilted wall normal RPY", wall_normal_frame_rpy);
 local_print_availability("online pure normal RPY", mob_normal_frame_rpy_online_pure);
 local_print_availability("offline pure normal RPY", mob_normal_frame_rpy_offline_pure);
 local_print_availability("offline eta_T normal RPY", mob_normal_frame_rpy_offline_eta);
-local_print_availability("MOB force pure", mob_force_none);
+local_print_availability("firmware raw MOB force f_hat_l", firmware_raw_force);
+local_print_availability("firmware TE-corrected force f_bar_l", firmware_force_bar);
+local_print_availability("firmware contact-consistent force f_hat_c", firmware_contact_force);
 local_print_availability("MOB torque", mob_torque);
 local_print_availability("offline MOB pure", offline_mob_force_none);
 local_print_availability("offline MOB torque 2nd", offline_mob_torque_2nd);
 local_print_availability("offline MOB eta_T", offline_mob_eta_force);
+local_print_availability("offline new raw force f_hat_l", offline_new_raw_force);
+local_print_availability("offline new raw torque tau_hat_l", offline_new_raw_torque);
+local_print_availability("offline new force bar f_bar_l", offline_new_force_bar);
+local_print_availability("offline new torque bar tau_bar_l", offline_new_torque_bar);
+local_print_availability("offline new contact force f_hat_c", offline_new_contact_force);
+local_print_availability("offline new eta_T", offline_new_eta_hat);
 local_print_availability("firmware eta_T", firmware_eta_hat);
 local_print_availability("firmware eta_T matched force", firmware_eta_match_force);
 local_print_availability("firmware eta_T residual", firmware_eta_residual);
-local_print_availability("firmware eta_T corrected force", firmware_eta_force);
 local_print_availability("estimated normal", normal_est);
 local_print_availability("force command", force_desired);
 fprintf("[INFO] Offline MOB mass %.6f kg, Kp %.6f, Kf %.3f, dt mode %s\n", ...
@@ -375,6 +423,45 @@ for i = 1:3
     local_apply_limits(ax, drone_position_xlim, drone_position_ylims{i});
 end
 xlabel('time [s]');
+
+%% 4.1) Plot: position and velocity command vs measurement
+tracking_xlim = [];                         % e.g. [10 80], [] keeps auto x-limits
+position_tracking_ylims = {[], [], []};     % position x/y/z y-limits [m]
+velocity_tracking_ylims = {[], [], []};     % velocity x/y/z y-limits [m/s]
+
+if any(isfinite([fw_cmd_xyz(:); vel_des(:)]))
+    figure('Name', 'Position and Velocity Tracking', 'Color', 'w', ...
+        'Position', [100 100 1400 850]);
+    tiledlayout(3, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+    tracking_axes = gobjects(6, 1);
+    for i = 1:3
+        ax_pos = nexttile(2 * i - 1);
+        tracking_axes(2 * i - 1) = ax_pos;
+        hold(ax_pos, 'on');
+        plot(ax_pos, time, fw_cmd_xyz(:, i), '--', 'LineWidth', 1.4);
+        plot(ax_pos, time, pose_xyz(:, i), '-', 'LineWidth', 1.4);
+        grid(ax_pos, 'on');
+        ylabel(ax_pos, sprintf('%s [m]', axis_names{i}));
+        title(ax_pos, sprintf('Position tracking: %s', axis_names{i}));
+        legend(ax_pos, {'command (firmware setpoint)', 'measured (drone)'}, ...
+            'Location', 'best');
+        local_apply_limits(ax_pos, tracking_xlim, position_tracking_ylims{i});
+
+        ax_vel = nexttile(2 * i);
+        tracking_axes(2 * i) = ax_vel;
+        hold(ax_vel, 'on');
+        plot(ax_vel, time, vel_des(:, i), '--', 'LineWidth', 1.4);
+        plot(ax_vel, time, state_vel(:, i), '-', 'LineWidth', 1.4);
+        grid(ax_vel, 'on');
+        ylabel(ax_vel, sprintf('%s [m/s]', axis_names{i}));
+        title(ax_vel, sprintf('Velocity tracking: %s', axis_names{i}));
+        legend(ax_vel, {'command', 'measured'}, 'Location', 'best');
+        local_apply_limits(ax_vel, tracking_xlim, velocity_tracking_ylims{i});
+    end
+    xlabel(tracking_axes(5), 'time [s]');
+    xlabel(tracking_axes(6), 'time [s]');
+    linkaxes(tracking_axes, 'x');
+end
 
 %% 5) Plot: end-effector position
 ee_position_xlim = [];              % e.g. [10 80], [] keeps auto x-limits
@@ -498,7 +585,7 @@ end
 mob_force_xlim = [];              % e.g. [10 80], [] keeps auto x-limits
 mob_force_ylims = {[-0.05 0.02], [-0.05 0.02], [-0.05 0.02]};   % x/y/z force y-limits
 
-if any(isfinite([mob_force_none(:); offline_mob_force_none(:); offline_mob_eta_force(:); firmware_eta_force(:)]))
+if any(isfinite([mob_force_none(:); offline_mob_force_none(:); offline_mob_eta_force(:); firmware_contact_force(:)]))
     figure('Name', 'MOB Force Online vs Offline Variants', 'Color', 'w');
     tiledlayout(3, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
     for i = 1:3
@@ -513,8 +600,8 @@ if any(isfinite([mob_force_none(:); offline_mob_force_none(:); offline_mob_eta_f
         if any(isfinite(offline_mob_eta_force(:, i)))
             plot(time, offline_mob_eta_force(:, i), 'k', 'LineWidth', 1.3);
         end
-        if any(isfinite(firmware_eta_force(:, i)))
-            plot(time, firmware_eta_force(:, i), ':', 'LineWidth', 1.5);
+        if any(isfinite(firmware_contact_force(:, i)))
+            plot(time, firmware_contact_force(:, i), ':', 'LineWidth', 1.5);
         end
         grid on;
         ylabel(sprintf('%s [N]', axis_names{i}));
@@ -523,7 +610,7 @@ if any(isfinite([mob_force_none(:); offline_mob_force_none(:); offline_mob_eta_f
         if any(isfinite(mob_force_none(:, i))), mob_legend_entries{end+1} = 'online pure'; end
         if any(isfinite(offline_mob_force_none(:, i))), mob_legend_entries{end+1} = 'offline pure'; end
         if any(isfinite(offline_mob_eta_force(:, i))), mob_legend_entries{end+1} = 'offline eta\_T'; end
-        if any(isfinite(firmware_eta_force(:, i))), mob_legend_entries{end+1} = 'firmware eta\_T'; end
+        if any(isfinite(firmware_contact_force(:, i))), mob_legend_entries{end+1} = 'firmware contact-consistent'; end
         if ~isempty(mob_legend_entries)
             legend(mob_legend_entries, 'Location', 'best');
         end
@@ -532,7 +619,92 @@ if any(isfinite([mob_force_none(:); offline_mob_force_none(:); offline_mob_eta_f
     xlabel('time [s]');
 end
 
-%% 9.1) Plot: MOB force vs force command
+%% 9.1) Online Force Recovery Pipeline: f_hat_l -> f_bar_l -> f_hat_c
+online_pipeline_xlim = [160 340];                 % e.g. [10 80], [] keeps auto x-limits
+online_pipeline_ylims = {[], [], []};      % Fx/Fy/Fz y-limits [N]
+online_pipeline_normalized_ylims = {[-1.05 1.05], [-1.05 1.05], [-1.05 1.05]};
+raw_force_color = [1.0 0.2 0.2];
+force_bar_color = [0.1 0.4 1.0];
+contact_force_color = [0.7 0.0 0.8];
+firmware_raw_force_normalized = local_normalize_rows(firmware_raw_force);
+firmware_force_bar_normalized = local_normalize_rows(firmware_force_bar);
+firmware_contact_force_normalized_pipeline = local_normalize_rows(firmware_contact_force);
+
+if any(isfinite([firmware_raw_force(:); firmware_force_bar(:); ...
+        firmware_contact_force(:); wall_true_normal_world(:)]))
+    figure('Name', 'Online Force Recovery Pipeline', 'Color', 'w', ...
+        'Position', [100 100 1400 800]);
+    tiledlayout(3, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+    online_pipeline_axes = gobjects(6, 1);
+    for i = 1:3
+        ax_force = nexttile(2 * i - 1);
+        online_pipeline_axes(2 * i - 1) = ax_force;
+        hold(ax_force, 'on');
+        plot(ax_force, time, firmware_raw_force(:, i), '-', ...
+            'Color', raw_force_color, 'LineWidth', 1.3);
+        plot(ax_force, time, firmware_force_bar(:, i), '-', ...
+            'Color', force_bar_color, 'LineWidth', 1.3);
+        plot(ax_force, time, firmware_contact_force(:, i), '-', ...
+            'Color', contact_force_color, 'LineWidth', 1.3);
+        grid(ax_force, 'on');
+        ylabel(ax_force, sprintf('F_%s [N]', axis_names{i}));
+        title(ax_force, sprintf('Online force recovery: F_%s', axis_names{i}));
+        legend(ax_force, {'raw MOB: \hat{f}_\ell', 'TE corrected: \bar{f}_\ell', ...
+            'contact-consistent: \hat{f}_c'}, 'Interpreter', 'tex', 'Location', 'best');
+        local_apply_limits(ax_force, online_pipeline_xlim, online_pipeline_ylims{i});
+
+        ax_normalized = nexttile(2 * i);
+        online_pipeline_axes(2 * i) = ax_normalized;
+        hold(ax_normalized, 'on');
+        plot(ax_normalized, time, firmware_raw_force_normalized(:, i), '-', ...
+            'Color', raw_force_color, 'LineWidth', 1.3);
+        plot(ax_normalized, time, firmware_force_bar_normalized(:, i), '-', ...
+            'Color', force_bar_color, 'LineWidth', 1.3);
+        plot(ax_normalized, time, firmware_contact_force_normalized_pipeline(:, i), '-', ...
+            'Color', contact_force_color, 'LineWidth', 1.3);
+        plot(ax_normalized, time, wall_true_normal_world(:, i), 'k--', 'LineWidth', 1.5);
+        grid(ax_normalized, 'on');
+        ylabel(ax_normalized, sprintf('%s [-]', axis_names{i}));
+        title(ax_normalized, sprintf('Normalized online forces vs wall normal: %s', axis_names{i}));
+        legend(ax_normalized, {'normalized \hat{f}_\ell', 'normalized \bar{f}_\ell', ...
+            'normalized \hat{f}_c', 'wall normal'}, ...
+            'Interpreter', 'tex', 'Location', 'best');
+        local_apply_limits(ax_normalized, online_pipeline_xlim, ...
+            online_pipeline_normalized_ylims{i});
+    end
+    xlabel(online_pipeline_axes(end - 1), 'time [s]');
+    xlabel(online_pipeline_axes(end), 'time [s]');
+    linkaxes(online_pipeline_axes, 'x');
+end
+
+%% 9.2) Online firmware vs MATLAB offline contact-consistent force
+contact_comparison_xlim = [];                 % e.g. [10 80]
+contact_comparison_ylims = {[], [], []};      % Fx/Fy/Fz y-limits [N]
+
+if any(isfinite([firmware_contact_force(:); offline_new_contact_force(:)]))
+    figure('Name', 'Online vs Offline Contact-Consistent Force', 'Color', 'w');
+    tiledlayout(3, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
+    contact_comparison_axes = gobjects(3, 1);
+    for i = 1:3
+        ax = nexttile;
+        contact_comparison_axes(i) = ax;
+        hold(ax, 'on');
+        plot(ax, time, firmware_contact_force(:, i), '-', ...
+            'Color', contact_force_color, 'LineWidth', 1.5);
+        plot(ax, time, offline_new_contact_force(:, i), '--', ...
+            'Color', [0.15 0.15 0.15], 'LineWidth', 1.3);
+        grid(ax, 'on');
+        ylabel(ax, sprintf('F_%s [N]', axis_names{i}));
+        title(ax, sprintf('Contact-consistent force: F_%s', axis_names{i}));
+        legend(ax, {'online firmware: \hat{f}_c', 'offline MATLAB: \hat{f}_c'}, ...
+            'Interpreter', 'tex', 'Location', 'best');
+        local_apply_limits(ax, contact_comparison_xlim, contact_comparison_ylims{i});
+    end
+    xlabel(contact_comparison_axes(end), 'time [s]');
+    linkaxes(contact_comparison_axes, 'x');
+end
+
+%% 9.3) Plot: MOB force vs force command
 % forceDesired is a scalar command along the vehicle's commanded contact
 % direction. Rotate the world-frame MOB estimate into the yaw-aligned body
 % frame and use -fHat_x so a positive preload command has the same sign.
@@ -590,14 +762,14 @@ pipeline_force_ylims = {[-0.05 0.05], [-0.05 0.05], [-0.05 0.05]};              
 pipeline_correction_delta_ylims = {[]};            % correction-delta overlay
 pipeline_estimated_normal_ylims = {[-1.05 1.05]}; % estimated-normal overlay
 
-if any(isfinite([mob_force_none(:); firmware_eta_force(:)]))
+if any(isfinite([mob_force_none(:); firmware_contact_force(:)]))
     figure('Name', 'Raw MOB vs Corrected Contact Force', 'Color', 'w');
     tiledlayout(3, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
     for i = 1:3
         ax = nexttile;
         plot(time, mob_force_none(:, i), 'LineWidth', 1.3);
         hold on;
-        plot(time, firmware_eta_force(:, i), 'LineWidth', 1.3);
+        plot(time, firmware_contact_force(:, i), 'LineWidth', 1.3);
         grid on;
         ylabel(sprintf('%s [N]', axis_names{i}));
         title(sprintf('Raw MOB vs corrected contact force: %s', axis_names{i}));
@@ -629,14 +801,14 @@ end
 
 %% 11) Plot: pure MOB vs eta_T-updated MOB and normalized wall-normal comparison
 pure_eta_axis_names = {'x', 'y', 'z'};
-pure_eta_comparison_xlim = [300 800];
+pure_eta_comparison_xlim = [];
 pure_eta_force_ylims = {[-0.08 0.06], [-0.08 0.06], [-0.08 0.06]};
 pure_eta_normalized_ylims = {[-1.05 1.05], [-1.05 1.05], [-1.05 1.05]};
 
 mob_force_none_normalized = local_normalize_rows(mob_force_none);
-firmware_eta_force_normalized = local_normalize_rows(firmware_eta_force);
+firmware_contact_force_normalized = local_normalize_rows(firmware_contact_force);
 
-if any(isfinite([mob_force_none(:); firmware_eta_force(:); wall_true_normal_world(:)]))
+if any(isfinite([mob_force_none(:); firmware_contact_force(:); wall_true_normal_world(:)]))
     figure('Name', 'Pure MOB vs Eta-T Updated MOB and Wall Normal', ...
         'Color', 'w', 'Position', [100 100 1400 800]);
     tiledlayout(3, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
@@ -649,9 +821,9 @@ if any(isfinite([mob_force_none(:); firmware_eta_force(:); wall_true_normal_worl
             plot(time, mob_force_none(:, i), 'LineWidth', 1.3);
             force_legend_entries{end+1} = 'pure MOB';
         end
-        if any(isfinite(firmware_eta_force(:, i)))
-            plot(time, firmware_eta_force(:, i), 'LineWidth', 1.3);
-            force_legend_entries{end+1} = '\eta_T-updated MOB';
+        if any(isfinite(firmware_contact_force(:, i)))
+            plot(time, firmware_contact_force(:, i), 'LineWidth', 1.3);
+            force_legend_entries{end+1} = 'contact-consistent force';
         end
         grid on;
         ylabel(sprintf('%s [N]', pure_eta_axis_names{i}));
@@ -668,9 +840,9 @@ if any(isfinite([mob_force_none(:); firmware_eta_force(:); wall_true_normal_worl
             plot(time, mob_force_none_normalized(:, i), 'LineWidth', 1.3);
             normalized_legend_entries{end+1} = 'normalized pure MOB';
         end
-        if any(isfinite(firmware_eta_force_normalized(:, i)))
-            plot(time, firmware_eta_force_normalized(:, i), 'LineWidth', 1.3);
-            normalized_legend_entries{end+1} = 'normalized \eta_T-updated MOB';
+        if any(isfinite(firmware_contact_force_normalized(:, i)))
+            plot(time, firmware_contact_force_normalized(:, i), 'LineWidth', 1.3);
+            normalized_legend_entries{end+1} = 'normalized contact-consistent force';
         end
         if any(isfinite(wall_true_normal_world(:, i)))
             plot(time, wall_true_normal_world(:, i), 'k--', 'LineWidth', 1.5);
@@ -714,10 +886,10 @@ end
 
 %% 13) Plot: firmware thrust effectiveness debug
 firmware_eta_debug_xlim = ([0 50]);        % shared with eta_T estimate
-firmware_eta_force_ylims = {[-5 5], [-5 5], [-5 5]};  % corrected/matched force y-limits
+firmware_contact_force_ylims = {[-5 5], [-5 5], [-5 5]};  % contact/matched force y-limits
 firmware_eta_residual_ylims = {[], [], []};  % torque residual y-limits
 
-if any(isfinite([firmware_eta_match_force(:); firmware_eta_force(:); firmware_eta_residual(:)]))
+if any(isfinite([firmware_eta_match_force(:); firmware_contact_force(:); firmware_eta_residual(:)]))
     figure('Name', 'Firmware Thrust Effectiveness Debug', 'Color', 'w');
     tiledlayout(3, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
     for i = 1:3
@@ -728,9 +900,9 @@ if any(isfinite([firmware_eta_match_force(:); firmware_eta_force(:); firmware_et
             plot(time, firmware_eta_match_force(:, i), '--', 'LineWidth', 1.2);
             fw_legend_entries{end+1} = 'matched force';
         end
-        if any(isfinite(firmware_eta_force(:, i)))
-            plot(time, firmware_eta_force(:, i), 'LineWidth', 1.4);
-            fw_legend_entries{end+1} = 'corrected force';
+        if any(isfinite(firmware_contact_force(:, i)))
+            plot(time, firmware_contact_force(:, i), 'LineWidth', 1.4);
+            fw_legend_entries{end+1} = 'contact-consistent force';
         end
         grid on;
         ylabel(sprintf('%s [N]', axis_names{i}));
@@ -738,7 +910,7 @@ if any(isfinite([firmware_eta_match_force(:); firmware_eta_force(:); firmware_et
         if ~isempty(fw_legend_entries)
             legend(fw_legend_entries, 'Location', 'best');
         end
-        local_apply_limits(ax, firmware_eta_debug_xlim, firmware_eta_force_ylims{i});
+        local_apply_limits(ax, firmware_eta_debug_xlim, firmware_contact_force_ylims{i});
     end
     xlabel('time [s]');
 
@@ -1272,6 +1444,124 @@ function f_hat_world = local_compute_offline_pure_mob(time, pose_rpy, motor_thru
     end
 end
 
+function [raw_force_world, raw_torque_world, eta_hat, force_bar_world, ...
+    torque_bar_world, contact_force_world] = ...
+    local_compute_offline_new_force_recovery(time, pose_rpy, motor_thrust, ...
+    state_vel, pos_vel, gyro_body_deg_s, mass_kg, gravity_ms2, Kp, Kf, ...
+    KpTau, Ktau, mob_alpha, eta_gamma, eta_rho, eta_initial, ...
+    inertia_diag, com_offset_body, contact_offset_body, arm_xy, k_tau_motor, motor_dir, ...
+    use_pos_velocity, dt_mode, fixed_dt)
+
+    n = numel(time);
+    raw_force_world = nan(n, 3);
+    raw_torque_world = nan(n, 3);
+    eta_hat = nan(n, 1);
+    force_bar_world = nan(n, 3);
+    torque_bar_world = nan(n, 3);
+    contact_force_world = nan(n, 3);
+
+    raw_observer.p_lin_hat = zeros(1, 3);
+    raw_observer.p_ang_hat = zeros(1, 3);
+    raw_observer.force_hat = zeros(1, 3);
+    raw_observer.torque_hat = zeros(1, 3);
+    raw_observer.force_out = zeros(1, 3);
+    raw_observer.torque_out = zeros(1, 3);
+
+    matched_force.signal = zeros(1, 3);
+    matched_force.signal_dot = zeros(1, 3);
+    matched_force.output = zeros(1, 3);
+    matched_torque.signal = zeros(1, 3);
+    matched_torque.signal_dot = zeros(1, 3);
+    matched_torque.output = zeros(1, 3);
+
+    eta = max(1.0e-6, eta_initial);
+    dt_last_valid = fixed_dt;
+
+    for k = 1:n
+        if strcmpi(char(dt_mode), 'fixed')
+            dt = fixed_dt;
+        elseif k == 1
+            dt = dt_last_valid;
+        else
+            dt = time(k) - time(k - 1);
+            if isfinite(dt) && dt > 0.0
+                dt_last_valid = dt;
+            else
+                dt = dt_last_valid;
+            end
+        end
+
+        v_world = state_vel(k, :);
+        if use_pos_velocity && all(isfinite(pos_vel(k, :)))
+            v_world = pos_vel(k, :);
+        end
+
+        if ~(isfinite(dt) && dt > 0.0) || ...
+                any(~isfinite(pose_rpy(k, :))) || ...
+                any(~isfinite(motor_thrust(k, :))) || ...
+                any(~isfinite(v_world)) || ...
+                any(~isfinite(gyro_body_deg_s(k, :)))
+            if k > 1
+                raw_force_world(k, :) = raw_force_world(k - 1, :);
+                raw_torque_world(k, :) = raw_torque_world(k - 1, :);
+                eta_hat(k) = eta_hat(k - 1);
+                force_bar_world(k, :) = force_bar_world(k - 1, :);
+                torque_bar_world(k, :) = torque_bar_world(k - 1, :);
+                contact_force_world(k, :) = contact_force_world(k - 1, :);
+            end
+            continue;
+        end
+
+        R = local_rpy_to_rotmat(pose_rpy(k, :));
+        thrust_row = motor_thrust(k, :);
+        f1 = thrust_row(1); f2 = thrust_row(2);
+        f3 = thrust_row(3); f4 = thrust_row(4);
+
+        body_force = [0.0, 0.0, f1 + f2 + f3 + f4];
+        world_force = (R * body_force(:)).';
+        body_torque = [
+            arm_xy * ((f3 + f4) - (f1 + f2)), ...
+            arm_xy * ((f2 + f3) - (f1 + f4)), ...
+            k_tau_motor * (motor_dir(1) * f1 + motor_dir(2) * f2 + ...
+                           motor_dir(3) * f3 + motor_dir(4) * f4)];
+        body_torque = body_torque + cross(com_offset_body, body_force);
+
+        omega_body = deg2rad(gyro_body_deg_s(k, :));
+        p_lin_world = mass_kg * v_world;
+        p_ang_body = inertia_diag .* omega_body;
+        cori_body = cross(omega_body, p_ang_body);
+        gravity_world = [0.0, 0.0, mass_kg * gravity_ms2];
+        contact_offset_world = (R * contact_offset_body(:)).';
+
+        [matched_force, matched_force_input_world] = local_observer_matched_signal( ...
+            matched_force, world_force, dt, Kf, Kp, mob_alpha);
+        [matched_torque, matched_torque_input_body] = local_observer_matched_signal( ...
+            matched_torque, body_torque, dt, Ktau, KpTau, mob_alpha);
+        matched_torque_input_world = (R * matched_torque_input_body(:)).';
+
+        raw_observer = local_run_observer_variant(raw_observer, p_lin_world, p_ang_body, ...
+            world_force, body_torque, gravity_world, cori_body, ...
+            dt, Kp, KpTau, Kf, Ktau, mob_alpha);
+
+        sample_raw_force_world = raw_observer.force_out;
+        sample_raw_torque_world = (R * raw_observer.torque_out(:)).';
+        [eta, sample_force_bar_world, sample_torque_bar_world] = ...
+            local_run_new_eta_t_correction(eta, ...
+            sample_raw_force_world, sample_raw_torque_world, ...
+            matched_force_input_world, matched_torque_input_world, contact_offset_world, ...
+            dt, eta_gamma, eta_rho);
+        sample_contact_force_world = local_reconstruct_new_contact_force( ...
+            sample_force_bar_world, sample_torque_bar_world, contact_offset_world);
+
+        raw_force_world(k, :) = sample_raw_force_world;
+        raw_torque_world(k, :) = sample_raw_torque_world;
+        eta_hat(k) = eta;
+        force_bar_world(k, :) = sample_force_bar_world;
+        torque_bar_world(k, :) = sample_torque_bar_world;
+        contact_force_world(k, :) = sample_contact_force_world;
+    end
+end
+
 function [force_2nd, torque_2nd, force_kep, force_eta, eta_hat] = ...
     local_compute_offline_point_contact_eta_mob(time, pose_rpy, motor_thrust, ...
     state_vel, pos_vel, gyro_body_deg_s, mass_kg, gravity_ms2, Kp, Kf, ...
@@ -1476,6 +1766,41 @@ function [eta, corrected_force_world] = local_run_eta_t_correction(eta, ...
 
     corrected_force_world = force_world_raw - (eta - 1.0) * matched_force_input_world;
     corrected_force_world = local_sanitize_row(corrected_force_world);
+end
+
+function [eta, force_bar_world, torque_bar_world] = local_run_new_eta_t_correction(eta, ...
+    raw_force_world, raw_torque_world, matched_force_input_world, ...
+    matched_torque_input_world, contact_offset_world, dt, gamma, rho_eta)
+
+    y_eta = cross(contact_offset_world, matched_force_input_world) - ...
+        matched_torque_input_world;
+    eps_tau = cross(contact_offset_world, raw_force_world) - raw_torque_world;
+    eps_eta = eps_tau - y_eta * (eta - 1.0);
+    denominator = local_sanitize_positive(rho_eta, 0.01) + dot(y_eta, y_eta);
+    eta = eta + dt * max(0.0, gamma) * dot(y_eta, eps_eta) / denominator;
+    eta = max(1.0e-6, eta);
+
+    force_bar_world = raw_force_world - (eta - 1.0) * matched_force_input_world;
+    torque_bar_world = raw_torque_world - (eta - 1.0) * matched_torque_input_world;
+    force_bar_world = local_sanitize_row(force_bar_world);
+    torque_bar_world = local_sanitize_row(torque_bar_world);
+end
+
+function contact_force_world = local_reconstruct_new_contact_force( ...
+    force_bar_world, torque_bar_world, contact_offset_world)
+    % Paper Eq. (8): retain the lever-arm-parallel corrected force and
+    % recover its transverse component from the corrected torque channel.
+    r_squared = dot(contact_offset_world, contact_offset_world);
+    if ~(isfinite(r_squared) && r_squared > 1.0e-12)
+        contact_force_world = force_bar_world;
+        return;
+    end
+
+    parallel_force_world = contact_offset_world * ...
+        (dot(contact_offset_world, force_bar_world) / r_squared);
+    transverse_force_world = -cross(contact_offset_world, torque_bar_world) / r_squared;
+    contact_force_world = local_sanitize_row( ...
+        parallel_force_world + transverse_force_world);
 end
 
 function y = local_lpf1_row(y_prev, x, alpha)

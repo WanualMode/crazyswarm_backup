@@ -118,12 +118,14 @@ public:
   // 96     : firmware thrust effectiveness eta_hat [-]
   // 97..99 : firmware matched force xyz [N], world frame
   // 100..102 : firmware point-contact torque residual xyz [N*m], world frame
-  // 103..105 : firmware eta-corrected force xyz [N], world frame (legacy alias)
+  // 103..105 : legacy thrustEffCorrF xyz [N], world frame (historical f_bar_l slots)
   // New pipeline fields are append-only; the numeric layout through index 105 is unchanged.
   // 106..108 : rawMobF xyz [N], world frame
-  // 109..111 : rawMobT xyz [N*m], world frame
+  // 109..111 : rawMobT xyz [N*m], world frame (legacy slots; no longer populated)
   // 112..114 : contactF xyz [N], world frame
   // 115      : etaHat [-]
+  // 116..118 : forceBarF xyz [N], world frame
+  // 119..121 : gyroBody xyz [deg/s], body frame
   enum DebugIndex : std::size_t {
     IDX_RAW_MOB_FX = 106,
     IDX_RAW_MOB_FY,
@@ -135,10 +137,20 @@ public:
     IDX_CONTACT_FY,
     IDX_CONTACT_FZ,
     IDX_ETA_HAT,
+    IDX_FORCE_BAR_FX,
+    IDX_FORCE_BAR_FY,
+    IDX_FORCE_BAR_FZ,
+    IDX_GYRO_BODY_X,
+    IDX_GYRO_BODY_Y,
+    IDX_GYRO_BODY_Z,
     DEBUG_DATA_SIZE
   };
   static constexpr std::size_t kDataLen = DEBUG_DATA_SIZE;
   static_assert(IDX_RAW_MOB_FX == 106, "new fields must remain append-only");
+  static_assert(IDX_CONTACT_FX == 112, "contact-force indices must remain stable");
+  static_assert(IDX_ETA_HAT == 115, "etaHat index must remain stable");
+  static_assert(IDX_FORCE_BAR_FX == 116, "forceBar must be appended after the existing layout");
+  static_assert(IDX_GYRO_BODY_X == 119, "body gyro must be append-only");
 
   DataLoggingDebugNode()
   : Node("data_logging_debug")
@@ -189,12 +201,16 @@ public:
       cf_ns_ + "/cf_su_body_torque", 10, std::bind(&DataLoggingDebugNode::bodyTorqueCallback, this, _1));
     sub_vel_pair_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       cf_ns_ + "/cf_su_vel_pair", 10, std::bind(&DataLoggingDebugNode::velPairCallback, this, _1));
+    sub_gyro_body_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
+      cf_ns_ + "/cf_gyro_body", 10, std::bind(&DataLoggingDebugNode::gyroBodyCallback, this, _1));
     sub_acc_normal_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       cf_ns_ + "/cf_su_acc_normal", 10, std::bind(&DataLoggingDebugNode::accNormalCallback, this, _1));
     sub_normal_debug_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       cf_ns_ + "/cf_su_normal_debug", 10, std::bind(&DataLoggingDebugNode::normalDebugCallback, this, _1));
     sub_mob_raw_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       cf_ns_ + "/cf_mob_raw", 10, std::bind(&DataLoggingDebugNode::mobRawCallback, this, _1));
+    sub_force_bar_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
+      cf_ns_ + "/cf_force_bar", 10, std::bind(&DataLoggingDebugNode::forceBarCallback, this, _1));
     sub_contact_force_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       cf_ns_ + "/cf_contact_force", 10, std::bind(&DataLoggingDebugNode::contactForceCallback, this, _1));
     sub_normal_metrics_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
@@ -270,11 +286,13 @@ public:
     out.data.push_back(thrust_eff_eta_hat_);
     push3(out, thrust_eff_match_force_);
     push3(out, thrust_eff_residual_);
-    push3(out, thrust_eff_corrected_force_);
+    push3(out, legacy_force_bar_);
     push3(out, raw_mob_force_);
     push3(out, raw_mob_torque_);
     push3(out, contact_force_);
     out.data.push_back(eta_hat_);
+    push3(out, force_bar_);
+    push3(out, gyro_body_deg_s_);
 
     if (out.data.size() != static_cast<size_t>(kDataLen)) {
       out.data.resize(kDataLen, qnan_debug());
@@ -360,7 +378,9 @@ private:
       << "thrustEffCorrFx,thrustEffCorrFy,thrustEffCorrFz,"
       << "rawMobFx,rawMobFy,rawMobFz,"
       << "rawMobTx,rawMobTy,rawMobTz,"
-      << "contactFx,contactFy,contactFz,etaHat\n";
+      << "contactFx,contactFy,contactFz,etaHat,"
+      << "forceBarFx,forceBarFy,forceBarFz,"
+      << "gyroBody_x,gyroBody_y,gyroBody_z\n";
     csv_.flush();
   }
 
@@ -446,6 +466,10 @@ private:
       pos_vel_[2] = msg->values[5];
     }
   }
+  void gyroBodyCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
+  {
+    copy3(msg, gyro_body_deg_s_);
+  }
   void accNormalCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
   {
     if (msg->values.size() >= 6) {
@@ -470,26 +494,27 @@ private:
   }
   void mobRawCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
   {
-    if (msg->values.size() >= 6) {
+    if (msg->values.size() >= 3) {
       for (std::size_t i = 0; i < 3; ++i) {
         raw_mob_force_[i] = msg->values[i];
-        raw_mob_torque_[i] = msg->values[i + 3];
       }
-      // Preserve useful legacy aliases without changing their indices.
-      mob_force_final_ = raw_mob_force_;
-      mob_torque_ = raw_mob_torque_;
+    }
+  }
+  void forceBarCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
+  {
+    if (msg->values.size() >= 4) {
+      for (std::size_t i = 0; i < 3; ++i) {
+        force_bar_[i] = msg->values[i];
+      }
+      eta_hat_ = msg->values[3];
     }
   }
   void contactForceCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
   {
-    if (msg->values.size() >= 4) {
+    if (msg->values.size() >= 3) {
       for (std::size_t i = 0; i < 3; ++i) {
         contact_force_[i] = msg->values[i];
       }
-      eta_hat_ = msg->values[3];
-      // Preserve the pre-existing eta/corrected-force columns as aliases.
-      thrust_eff_corrected_force_ = contact_force_;
-      thrust_eff_eta_hat_ = eta_hat_;
     }
   }
   void normalMetricsCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
@@ -632,9 +657,11 @@ private:
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_world_force_;
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_body_torque_;
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_vel_pair_;
+  rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_gyro_body_;
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_acc_normal_;
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_normal_debug_;
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_mob_raw_;
+  rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_force_bar_;
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_contact_force_;
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_normal_metrics_;
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_stabilizer_timing_;
@@ -663,6 +690,7 @@ private:
   std::array<double, 3> body_torque_ = {qnan_debug(), qnan_debug(), qnan_debug()};
   std::array<double, 3> state_vel_ = {qnan_debug(), qnan_debug(), qnan_debug()};
   std::array<double, 3> pos_vel_ = {qnan_debug(), qnan_debug(), qnan_debug()};
+  std::array<double, 3> gyro_body_deg_s_ = {qnan_debug(), qnan_debug(), qnan_debug()};
   std::array<double, 3> acc_ = {qnan_debug(), qnan_debug(), qnan_debug()};
   std::array<double, 3> acc_raw_body_ = {qnan_debug(), qnan_debug(), qnan_debug()};
   std::array<double, 3> acc_body_ = {qnan_debug(), qnan_debug(), qnan_debug()};
@@ -682,9 +710,10 @@ private:
   double thrust_eff_eta_hat_ = qnan_debug();
   std::array<double, 3> thrust_eff_match_force_ = {qnan_debug(), qnan_debug(), qnan_debug()};
   std::array<double, 3> thrust_eff_residual_ = {qnan_debug(), qnan_debug(), qnan_debug()};
-  std::array<double, 3> thrust_eff_corrected_force_ = {qnan_debug(), qnan_debug(), qnan_debug()};
+  std::array<double, 3> legacy_force_bar_ = {qnan_debug(), qnan_debug(), qnan_debug()};
   std::array<double, 3> raw_mob_force_ = {qnan_debug(), qnan_debug(), qnan_debug()};
   std::array<double, 3> raw_mob_torque_ = {qnan_debug(), qnan_debug(), qnan_debug()};
+  std::array<double, 3> force_bar_ = {qnan_debug(), qnan_debug(), qnan_debug()};
   std::array<double, 3> contact_force_ = {qnan_debug(), qnan_debug(), qnan_debug()};
   double eta_hat_ = qnan_debug();
   std::array<double, 3> ee_vel_used_ = {qnan_debug(), qnan_debug(), qnan_debug()};

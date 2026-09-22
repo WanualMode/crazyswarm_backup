@@ -154,16 +154,29 @@ Visualization Manager:
       Value: true
     - Class: rviz_default_plugins/Marker
       Enabled: true
-      Name: Corrected Contact Force
+      Name: TE Corrected Force Bar
       Namespaces:
-        corrected_contact_force: true
+        force_bar: true
       Topic:
         Depth: 5
         Durability Policy: Volatile
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /corrected_contact_force_marker
+        Value: /force_bar_marker
+      Value: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: Contact-Consistent Force
+      Namespaces:
+        contact_force: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /contact_force_marker
       Value: true
     - Class: rviz_default_plugins/Marker
       Enabled: false

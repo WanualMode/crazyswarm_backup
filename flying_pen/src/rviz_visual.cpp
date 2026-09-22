@@ -16,6 +16,7 @@
 #include <eigen3/Eigen/Geometry>
 #include <deque>
 #include <cmath>
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -24,10 +25,13 @@ using namespace std::chrono_literals;
 namespace {
 constexpr double kDegToRad = M_PI / 180.0;
 constexpr std::size_t kLegacyRawMobForceIndex = 54;
-constexpr std::size_t kLegacyContactForceIndex = 103;
+constexpr std::size_t kLegacyForceBarIndex = 103;
 constexpr std::size_t kRawMobForceIndex = 106;
 constexpr std::size_t kContactForceIndex = 112;
-constexpr std::size_t kPipelineDataSize = 116;
+constexpr std::size_t kForceBarIndex = 116;
+constexpr std::size_t kRawMobDataSize = kRawMobForceIndex + 3;
+constexpr std::size_t kContactForceDataSize = kContactForceIndex + 3;
+constexpr std::size_t kForceBarDataSize = kForceBarIndex + 3;
 constexpr double kForceArrowScale = 10.0;
 
 bool isFiniteVector(const Eigen::Vector3d & v)
@@ -86,7 +90,8 @@ public:
     raw_cmd_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("/cmd_position_marker", 10);
     fw_cmd_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("/fw_cmd_position_marker", 10);
     raw_force_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("/raw_mob_force_marker", 10);
-    corrected_force_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("/corrected_contact_force_marker", 10);
+    force_bar_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("/force_bar_marker", 10);
+    contact_force_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("/contact_force_marker", 10);
     normal_est_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("/normal_est_marker", 10);
     acc_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("/acc_marker", 10);
     vel_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("/vel_marker", 10);
@@ -100,8 +105,10 @@ public:
     rpy_meas_.setZero();
     cmd_pos_.setZero();
     fw_cmd_pos_.setZero();
-    raw_mob_force_.setZero();
-    corrected_contact_force_.setZero();
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    raw_mob_force_.setConstant(nan);
+    force_bar_.setConstant(nan);
+    contact_force_.setConstant(nan);
     normal_est_.setZero();
     world_vel_.setZero();
     world_acc_.setZero();
@@ -168,18 +175,35 @@ private:
     world_acc_[1] = msg->data[37];
     world_acc_[2] = msg->data[38];
 
-    const std::size_t raw_force_index =
-      msg->data.size() >= kPipelineDataSize ? kRawMobForceIndex : kLegacyRawMobForceIndex;
-    raw_mob_force_[0] = msg->data[raw_force_index];
-    raw_mob_force_[1] = msg->data[raw_force_index + 1];
-    raw_mob_force_[2] = msg->data[raw_force_index + 2];
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    raw_mob_force_.setConstant(nan);
+    force_bar_.setConstant(nan);
+    contact_force_.setConstant(nan);
 
-    if (msg->data.size() >= kLegacyContactForceIndex + 3) {
-      const std::size_t contact_force_index =
-        msg->data.size() >= kPipelineDataSize ? kContactForceIndex : kLegacyContactForceIndex;
-      corrected_contact_force_[0] = msg->data[contact_force_index];
-      corrected_contact_force_[1] = msg->data[contact_force_index + 1];
-      corrected_contact_force_[2] = msg->data[contact_force_index + 2];
+    if (msg->data.size() >= kRawMobDataSize) {
+      raw_mob_force_[0] = msg->data[kRawMobForceIndex];
+      raw_mob_force_[1] = msg->data[kRawMobForceIndex + 1];
+      raw_mob_force_[2] = msg->data[kRawMobForceIndex + 2];
+    } else if (msg->data.size() >= kLegacyRawMobForceIndex + 3) {
+      raw_mob_force_[0] = msg->data[kLegacyRawMobForceIndex];
+      raw_mob_force_[1] = msg->data[kLegacyRawMobForceIndex + 1];
+      raw_mob_force_[2] = msg->data[kLegacyRawMobForceIndex + 2];
+    }
+
+    if (msg->data.size() >= kForceBarDataSize) {
+      force_bar_[0] = msg->data[kForceBarIndex];
+      force_bar_[1] = msg->data[kForceBarIndex + 1];
+      force_bar_[2] = msg->data[kForceBarIndex + 2];
+    } else if (msg->data.size() >= kLegacyForceBarIndex + 3) {
+      force_bar_[0] = msg->data[kLegacyForceBarIndex];
+      force_bar_[1] = msg->data[kLegacyForceBarIndex + 1];
+      force_bar_[2] = msg->data[kLegacyForceBarIndex + 2];
+    }
+
+    if (msg->data.size() >= kContactForceDataSize) {
+      contact_force_[0] = msg->data[kContactForceIndex];
+      contact_force_[1] = msg->data[kContactForceIndex + 1];
+      contact_force_[2] = msg->data[kContactForceIndex + 2];
     }
 
     normal_est_[0] = msg->data[76];
@@ -306,7 +330,8 @@ private:
     publishSphere(fw_cmd_pub_, stamp, "world", "fw_cmd_position", 0, p_fw_cmd, 0.06, 0.90f, 0.35f, 0.10f, 0.90f);
 
     publishArrow(raw_force_pub_, stamp, "world", "raw_mob_force", 0, p_ee, raw_mob_force_, kForceArrowScale, 0.02, 0.04, 0.06, 1.0f, 0.2f, 0.2f);
-    publishArrow(corrected_force_pub_, stamp, "world", "corrected_contact_force", 0, p_ee, corrected_contact_force_, kForceArrowScale, 0.02, 0.04, 0.06, 0.7f, 0.0f, 0.8f);
+    publishArrow(force_bar_pub_, stamp, "world", "force_bar", 0, p_ee, force_bar_, kForceArrowScale, 0.02, 0.04, 0.06, 0.1f, 0.4f, 1.0f);
+    publishArrow(contact_force_pub_, stamp, "world", "contact_force", 0, p_ee, contact_force_, kForceArrowScale, 0.02, 0.04, 0.06, 0.7f, 0.0f, 0.8f);
     publishArrow(normal_est_pub_, stamp, "world", "normal_estimation", 0, p_ee, normal_est_, 0.35, 0.02, 0.04, 0.06, 0.1f, 0.8f, 0.2f);
     publishArrow(acc_pub_, stamp, "world", "acceleration", 0, p0, world_acc_, 0.5, 0.015, 0.03, 0.05, 0.0f, 0.0f, 1.0f);
     publishArrow(vel_pub_, stamp, "world", "velocity", 0, p0, world_vel_, 1.0, 0.015, 0.03, 0.05, 1.0f, 0.8f, 0.0f);
@@ -742,6 +767,14 @@ private:
     marker.header.frame_id = frame_id;
     marker.ns = ns;
     marker.id = id;
+    if (
+      !std::isfinite(start.x) || !std::isfinite(start.y) || !std::isfinite(start.z) ||
+      !isFiniteVector(vec))
+    {
+      marker.action = visualization_msgs::msg::Marker::DELETE;
+      pub->publish(marker);
+      return;
+    }
     marker.type = visualization_msgs::msg::Marker::ARROW;
     marker.action = visualization_msgs::msg::Marker::ADD;
 
@@ -960,7 +993,8 @@ private:
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr raw_cmd_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr fw_cmd_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr raw_force_pub_;
-  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr corrected_force_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr force_bar_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr contact_force_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr normal_est_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr acc_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr vel_pub_;
@@ -975,7 +1009,8 @@ private:
   Eigen::Vector3d fw_cmd_pos_;
   double cmd_yaw_deg_{0.0};
   Eigen::Vector3d raw_mob_force_;
-  Eigen::Vector3d corrected_contact_force_;
+  Eigen::Vector3d force_bar_;
+  Eigen::Vector3d contact_force_;
   Eigen::Vector3d normal_est_;
   Eigen::Vector3d world_vel_;
   Eigen::Vector3d world_acc_;
