@@ -452,7 +452,34 @@ if any(isfinite(filtered_contact_velocity(:)))
     local_apply_limits(ax_scalar, contact_velocity_xlim, contact_velocity_scalar_ylim);
 end
 
-%% 3.0) Plot: accRaw vs acc with first-order LPF
+%% 3.0) Plot: Kalman vs Differentiated OptiTrack World Velocity Overlay
+velocity_pair_xlim = [];                  % e.g. [10 80], [] keeps auto x-limits
+velocity_pair_ylims = {[], [], []};       % shared {vx, vy, vz} limits
+
+if any(isfinite([state_vel(:); pos_vel(:)]))
+    figure('Name', 'Kalman vs Differentiated OptiTrack Velocity', ...
+        'Color', 'w', 'Position', [100 100 1000 850]);
+    velocity_pair_layout = tiledlayout(3, 1, ...
+        'TileSpacing', 'compact', 'Padding', 'compact');
+    for i = 1:3
+        ax = nexttile;
+        plot(ax, time, state_vel(:, i), 'LineWidth', 1.3);
+        hold(ax, 'on');
+        plot(ax, time, pos_vel(:, i), '--', 'LineWidth', 1.3);
+        grid(ax, 'on');
+        ylabel(ax, sprintf('$v_{%s}$ [m/s]', axis_names{i}), ...
+            'Interpreter', 'latex');
+        xlabel(ax, 'Time [s]');
+        title(ax, sprintf('World %s velocity', upper(axis_names{i})));
+        legend(ax, {'Kalman state velocity', 'Differentiated OptiTrack position'}, ...
+            'Location', 'best');
+        local_apply_limits(ax, velocity_pair_xlim, velocity_pair_ylims{i});
+    end
+    title(velocity_pair_layout, ...
+        'Kalman vs Differentiated OptiTrack World Velocity');
+end
+
+%% 3.1) Plot: accRaw vs acc with first-order LPF
 imu_acc_xlim = [];                 % e.g. [10 80], [] keeps auto x-limits
 imu_acc_ylims = {[-0.05 0.05], [-0.05 0.05], [0.95 1.05]};      % x/y/z acceleration y-limits
 raw_line_width = 3.0;
@@ -498,7 +525,7 @@ if any(isfinite([acc_raw_body_g(:); acc_body_g(:)]))
     end
 end
 
-%% 3.1) Plot: estimated normal vector and top-down EE trajectory
+%% 3.2) Plot: estimated normal vector and top-down EE trajectory
 estimated_normal_xlim = [225 406];        % e.g. [10 80], [] keeps auto x-limits
 estimated_normal_ylims = {[-1.05 1.05], [-1.05 1.05], [-1.05 1.05]};
 normal_topdown_xlim = [];          % world x limits [m], [] keeps auto limits
@@ -574,7 +601,7 @@ if any(isfinite(normal_est(:)))
     local_apply_limits(ax_topdown, normal_topdown_xlim, normal_topdown_ylim);
 end
 
-%% 3.2) Plot: firmware velocity modulation telemetry
+%% 3.3) Plot: firmware velocity modulation telemetry
 velocity_modulation_xlim = [185 275];
 velocity_modulation_n_hat_dot_ylims = {[-0.5 0.5], [-0.5 0.5], [-0.5 0.5]};
 velocity_modulation_kappa_ylim = [0 15];
@@ -890,9 +917,9 @@ if any(isfinite([mob_force_none(:); offline_mob_force_none(:); offline_mob_eta_f
 end
 
 %% 9.1) Online Force Recovery Pipeline: f_hat_l -> f_bar_l -> f_hat_c
-online_pipeline_xlim = [160 340];                 % e.g. [10 80], [] keeps auto x-limits
-online_pipeline_ylims = {[], [], []};      % Fx/Fy/Fz y-limits [N]
-online_pipeline_normalized_ylims = {[-1.05 1.05], [-1.05 1.05], [-1.05 1.05]};
+online_pipeline_xlim = [];                 % e.g. [10 80], [] keeps auto x-limits
+online_pipeline_ylims = {[-0.1 0.1], [-0.1 0.1], [-0.1 0.1]};      % Fx/Fy/Fz y-limits [N]
+online_pipeline_normalized_ylims = {[-1 1], [-1 1], [-1 1]};
 raw_force_color = [1.0 0.2 0.2];
 force_bar_color = [0.1 0.4 1.0];
 contact_force_color = [0.7 0.0 0.8];
@@ -949,7 +976,7 @@ end
 
 %% 9.2) Online firmware vs MATLAB offline contact-consistent force
 contact_comparison_xlim = [];                 % e.g. [10 80]
-contact_comparison_ylims = {[], [], []};      % Fx/Fy/Fz y-limits [N]
+contact_comparison_ylims = {[-0.1 0.1], [-0.1 0.1], [-0.1 0.1]};      % Fx/Fy/Fz y-limits [N]
 
 if any(isfinite([firmware_contact_force(:); offline_new_contact_force(:)]))
     figure('Name', 'Online vs Offline Contact-Consistent Force', 'Color', 'w');

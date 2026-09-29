@@ -3,8 +3,8 @@ robot_types:
     firmware_params:
       su_wrench:
         mass: 0.045000  # observer mass model [kg]
-        comOffX: -0.000640  # body-frame CoM offset x [m]
-        comOffY: -0.000102  # body-frame CoM offset y [m]
+        comOffX: -0.000551  # body-frame CoM offset x [m]
+        comOffY: -0.000142  # body-frame CoM offset y [m]
         comOffZ: 0.0  # body-frame CoM offset z [m]
         rOffX: 0.085
         rOffY: 0.0
@@ -19,7 +19,7 @@ robot_types:
         normBeta: 4.0  # [1/s] beta ≈ 2*pi*f_c, decay rate of the normal-axis memory matrix (normal이 굼뜨면 베타 올려)
         normGamma: 2.0  # [1/s] normal-estimate tracking gain (너무 예민하면 감마낮춰)
         normEpsV: 0.0016  # [m^2/s^2], velocity-projection regularization epsilon_v
-        normEpsF: 0.001  # [N], minimum force evidence norm epsilon_f
+        normEpsF: 100.001  # [N], minimum force evidence norm epsilon_f
 
         velModEn: 1  # 0: disabled, 1: manual tangential velocity modulation enabled
         velModABar: 0.013  # [m/s^2], geometry-induced normal acceleration bound
